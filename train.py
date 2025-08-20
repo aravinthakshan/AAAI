@@ -6,7 +6,7 @@ from utils.dataloader_freq import TrainDataset
 from utils.LRScheduler import CosineDecay
 from config import Config
 from tqdm import tqdm
-
+import os 
 
 def structure_loss(logits, mask):
 	"""
@@ -53,8 +53,14 @@ def train():
 		print(f'Epoch: {epoch + 1}, LR: {np.round(scheduler.get_lr(), 8)}, Loss: {np.round(np.mean(loss_iter), 8)}')
 		scheduler.step()
 
-		if (epoch+1) % 5 == 0 or epoch == cfg.epochs-1:
-			torch.save(model.state_dict(),  f'save_pth/epoch_{epoch+1}.pth')
+		# if (epoch+1) % 5 == 0 or epoch == cfg.epochs-1:
+		# 	torch.save(model.state_dict(),  f'save_pth/epoch_{epoch+1}.pth') # /kaggle/working/
+		save_dir = "/kaggle/working/models"
+		os.makedirs(save_dir, exist_ok=True)
+
+		if (epoch + 1) % 5 == 0 or epoch == cfg.epochs - 1:
+			save_path = os.path.join(save_dir, f"epoch_{epoch+1}.pth")
+			torch.save(model.state_dict(), save_path)
 
 
 if __name__ == '__main__':
