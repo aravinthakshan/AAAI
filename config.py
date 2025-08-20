@@ -4,7 +4,7 @@ import torch
 
 class Config:
     def __init__(self):
-        dataset_dir = './data'
+        dataset_dir = '/kaggle/input/camodata'
         self.dp = DataPath(dataset_dir)
         self.num_workers = 8
 
