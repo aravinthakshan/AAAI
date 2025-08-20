@@ -6,12 +6,12 @@ class Config:
     def __init__(self):
         dataset_dir = '/kaggle/input/camodata'
         self.dp = DataPath(dataset_dir)
-        self.num_workers = 8
+        self.num_workers = 4 # changed this for kaggle
 
         self.CUDA = True
         self.device = torch.device('cuda' if self.CUDA else 'cpu')
 
-        self.epochs = 200
+        self.epochs = 1 # changed this for testing
         self.trainsize = 384
         self.batch_size = 32
         self.weight_decay = 4e-8
