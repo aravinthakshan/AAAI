@@ -81,7 +81,7 @@ if __name__ == '__main__':
 	                                           num_workers=cfg.num_workers,
 	                                           pin_memory=True)
 
-
+	# 147.600K 1.253G Initial Point
 	optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
 	scheduler = CosineDecay(optimizer, max_lr=cfg.learning_rate, min_lr=cfg.min_lr, max_epoch=cfg.epochs)
 

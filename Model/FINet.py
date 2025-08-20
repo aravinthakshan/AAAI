@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from Model.EfficientNet import EfficientNet_B0
 from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
-
+from Model.Replacements import FSM_FFM
 
 # replace with DSC - Ghost - Convs
 class DeBlock(nn.Module):
@@ -166,10 +166,14 @@ class FINet(nn.Module):
         self.re_conv3 = ConvBNGeLU(in_channels=stage_channels[3], out_channels=channels[2], kernel_size=1)
         self.re_conv4 = ConvBNGeLU(in_channels=stage_channels[4], out_channels=channels[3], kernel_size=1)
         # frequency fusion, initialized with necessary channels
-        self.ffm1 = FFM(channels[0]) 
-        self.ffm2 = FFM(channels[1])
-        self.ffm3 = FFM(channels[2])
-        self.ffm4 = FFM(channels[3])
+        # self.ffm1 = FFM(channels[0]) 
+        # self.ffm2 = FFM(channels[1])
+        # self.ffm3 = FFM(channels[2])
+        # self.ffm4 = FFM(channels[3])
+        self.ffm1 = FSM_FFM(channels[0])
+        self.ffm2 = FSM_FFM(channels[1])
+        self.ffm3 = FSM_FFM(channels[2])
+        self.ffm4 = FSM_FFM(channels[3])
         # activation
         self.gelu = nn.GELU()
         # decoder:
@@ -227,3 +231,29 @@ if __name__ == '__main__':
                                          round=3)
     print(params, flops)
 
+    model.eval()  # Set to evaluation mode
+
+    # Create sample input tensors
+    batch_size = 1
+    input_height, input_width = 384, 384
+    freq_height, freq_width = 48, 48
+
+    # Main input tensor (RGB image)
+    x = torch.randn(batch_size, 3, input_height, input_width)
+
+    # High and low frequency tensors (96 channels each)
+    high = torch.randn(batch_size, 96, freq_height, freq_width)
+    low = torch.randn(batch_size, 96, freq_height, freq_width)
+
+    # Forward pass through the model
+    with torch.no_grad():  # Disable gradients for inference
+        out1, out2, out3, out4 = model(x, high, low)
+
+    # Print output shapes
+    print(f"Input shape: {x.shape}")
+    print(f"High freq shape: {high.shape}")
+    print(f"Low freq shape: {low.shape}")
+    print(f"Output 1 shape: {out1.shape}")
+    print(f"Output 2 shape: {out2.shape}")
+    print(f"Output 3 shape: {out3.shape}")
+    print(f"Output 4 shape: {out4.shape}")
