@@ -59,7 +59,7 @@ def train():
 		os.makedirs(save_dir, exist_ok=True)
 
 		if (epoch + 1) % 5 == 0 or epoch == cfg.epochs - 1:
-			save_path = os.path.join(save_dir, f"epoch_{epoch+1}.pth")
+			save_path = os.path.join(save_dir, f"FINet.pth")
 			torch.save(model.state_dict(), save_path)
 
 

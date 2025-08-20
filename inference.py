@@ -35,7 +35,7 @@ def inference(datasets):
 
 
 if __name__ == '__main__':
-	pth_path = 'FINet.pth'
+	pth_path =  '/kaggle/working/models/FINet.pth'
 	# pth_path = 'FINet-TinyNetA.pth'
 
 	cfg = Config()
