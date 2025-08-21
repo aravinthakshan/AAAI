@@ -8,7 +8,7 @@ from config import Config
 from tqdm import tqdm
 import os
 import glob
-
+import argparse
 
 def structure_loss(logits, mask):
     """
@@ -68,6 +68,21 @@ def train(start_epoch=0):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Train FINet model with options")
+    parser.add_argument('--backbone', type=str, default='efficientb0',
+                        choices=['efficientb0', 'tinynet-a'],
+                        help='Backbone network for FINet')
+    parser.add_argument('--optimizer', type=str, default='adam',
+                        choices=['adam', 'sgd'],
+                        help='Optimizer type')
+    parser.add_argument('--scheduler', type=str, default='cosine',
+                        choices=['cosine', 'none'],
+                        help='Learning rate scheduler')
+    parser.add_argument('--save_dir', type=str, default="/kaggle/working/models",
+                        help='Directory to save checkpoints')
+    args = parser.parse_args()
+
+    # ---- Seeding ----
     seed = 123456
     random.seed(seed)
     np.random.seed(seed)
@@ -79,28 +94,46 @@ if __name__ == '__main__':
 
     cfg = Config()
 
+    # ---- Model ----
     from Model.FINet import FINet
-    model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+    model = FINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
 
-    train_dataset = TrainDataset(image_root=cfg.dp.train_imgs, gt_root=cfg.dp.train_masks,
-                                 trainsize=cfg.trainsize, edge_root=None)
+    # ---- Data ----
+    train_dataset = TrainDataset(image_root=cfg.dp.train_imgs,
+                                 gt_root=cfg.dp.train_masks,
+                                 trainsize=cfg.trainsize,
+                                 edge_root=None)
     train_datald = torch.utils.data.DataLoader(dataset=train_dataset,
                                                batch_size=cfg.batch_size,
                                                shuffle=True,
                                                num_workers=cfg.num_workers,
                                                pin_memory=True)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
-    scheduler = CosineDecay(optimizer, max_lr=cfg.learning_rate, min_lr=cfg.min_lr, max_epoch=cfg.epochs)
+    # ---- Optimizer ----
+    if args.optimizer == 'adam':
+        optimizer = torch.optim.Adam(model.parameters(),
+                                     lr=cfg.learning_rate,
+                                     weight_decay=cfg.weight_decay)
+    elif args.optimizer == 'sgd':
+        optimizer = torch.optim.SGD(model.parameters(),
+                                    lr=cfg.learning_rate,
+                                    momentum=0.9,
+                                    weight_decay=cfg.weight_decay)
 
-    # ---- Resume from checkpoint if exists ----
-    save_dir = "/kaggle/working/models"
-    os.makedirs(save_dir, exist_ok=True)
-    checkpoints = sorted(glob.glob(os.path.join(save_dir, "FINet_epoch*.pth")))
+    # ---- Scheduler ----
+    if args.scheduler == 'cosine':
+        scheduler = CosineDecay(optimizer, max_lr=cfg.learning_rate,
+                                min_lr=cfg.min_lr, max_epoch=cfg.epochs)
+    else:
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: 1.0)
+
+    # ---- Resume from checkpoint ----
+    os.makedirs(args.save_dir, exist_ok=True)
+    checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "FINet_epoch*.pth")))
 
     start_epoch = 0
     if checkpoints:
-        latest_ckpt = checkpoints[-1]  # last checkpoint
+        latest_ckpt = checkpoints[-1]
         print(f"Resuming training from checkpoint {latest_ckpt}...")
         ckpt = torch.load(latest_ckpt, map_location=cfg.device)
         model.load_state_dict(ckpt['model'])
@@ -112,3 +145,49 @@ if __name__ == '__main__':
         print("No checkpoint found. Training from scratch.")
 
     train(start_epoch=start_epoch)
+
+# if __name__ == '__main__':
+#     seed = 123456
+#     random.seed(seed)
+#     np.random.seed(seed)
+#     torch.manual_seed(seed)
+#     torch.cuda.manual_seed(seed)
+#     torch.backends.cudnn.deterministic = True
+#     torch.backends.cudnn.benchmark = False
+#     torch.backends.cudnn.enabled = False
+
+#     cfg = Config()
+
+#     from Model.FINet import FINet
+#     model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+
+#     train_dataset = TrainDataset(image_root=cfg.dp.train_imgs, gt_root=cfg.dp.train_masks,
+#                                  trainsize=cfg.trainsize, edge_root=None)
+#     train_datald = torch.utils.data.DataLoader(dataset=train_dataset,
+#                                                batch_size=cfg.batch_size,
+#                                                shuffle=True,
+#                                                num_workers=cfg.num_workers,
+#                                                pin_memory=True)
+
+#     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
+#     scheduler = CosineDecay(optimizer, max_lr=cfg.learning_rate, min_lr=cfg.min_lr, max_epoch=cfg.epochs)
+
+#     # ---- Resume from checkpoint if exists ----
+#     save_dir = "/kaggle/working/models"
+#     os.makedirs(save_dir, exist_ok=True)
+#     checkpoints = sorted(glob.glob(os.path.join(save_dir, "FINet_epoch*.pth")))
+
+#     start_epoch = 0
+#     if checkpoints:
+#         latest_ckpt = checkpoints[-1]  # last checkpoint
+#         print(f"Resuming training from checkpoint {latest_ckpt}...")
+#         ckpt = torch.load(latest_ckpt, map_location=cfg.device)
+#         model.load_state_dict(ckpt['model'])
+#         optimizer.load_state_dict(ckpt['optimizer'])
+#         scheduler.load_state_dict(ckpt['scheduler'])
+#         start_epoch = ckpt['epoch']
+#         print(f"Checkpoint loaded. Resuming from epoch {start_epoch}")
+#     else:
+#         print("No checkpoint found. Training from scratch.")
+
+#     train(start_epoch=start_epoch)
