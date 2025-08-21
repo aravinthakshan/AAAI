@@ -34,14 +34,34 @@ def inference(datasets):
 			cv2.imwrite(os.path.join(save_path, name), out1)
 
 
+import glob
+
 if __name__ == '__main__':
-	pth_path =  '/kaggle/working/models/FINet.pth'
-	# pth_path = 'FINet-TinyNetA.pth'
+    cfg = Config()
+    model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
 
-	cfg = Config()
-	model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
-	# model = FINet(backbone='tinynet-a', channels=(8, 24, 32, 64)).to(cfg.device)
-	model.load_state_dict(torch.load(pth_path))
+    save_dir = "/kaggle/working/models"
+    checkpoints = sorted(glob.glob(os.path.join(save_dir, "FINet_epoch*.pth")))
+    if checkpoints:
+        latest_ckpt = checkpoints[-1]
+        checkpoint = torch.load(latest_ckpt, map_location=cfg.device)
+        model.load_state_dict(checkpoint['model'])
+        print(f"Loaded latest checkpoint: {latest_ckpt}")
+    else:
+        raise FileNotFoundError("No checkpoints found in models folder.")
 
-	datasets = ['CHAMELEON', 'CAMO', 'COD10K', 'NC4K']
-	inference(datasets)
+    datasets = ['CHAMELEON', 'CAMO', 'COD10K', 'NC4K']
+    inference(datasets)
+
+
+# if __name__ == '__main__':
+# 	pth_path =  '/kaggle/working/models/FINet.pth'
+# 	# pth_path = 'FINet-TinyNetA.pth'
+
+# 	cfg = Config()
+# 	model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+# 	# model = FINet(backbone='tinynet-a', channels=(8, 24, 32, 64)).to(cfg.device)
+# 	model.load_state_dict(torch.load(pth_path))
+
+# 	datasets = ['CHAMELEON', 'CAMO', 'COD10K', 'NC4K']
+# 	inference(datasets)
