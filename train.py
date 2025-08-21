@@ -55,15 +55,15 @@ def train():
 
 		# if (epoch+1) % 5 == 0 or epoch == cfg.epochs-1:
 		# 	torch.save(model.state_dict(),  f'save_pth/epoch_{epoch+1}.pth') # /kaggle/working/
+		
 		save_dir = "/kaggle/working/models"
-		save_path = "kaggle/working/other"
 		os.makedirs(save_dir, exist_ok=True)
 
 		if (epoch + 1) % 5 == 0 or epoch == cfg.epochs - 1:
-			save_path = os.path.join(save_dir, f"FINet.pth")
-			torch.save(model.state_dict(), save_path)
+			save_path = os.path.join(save_dir, f"FINet_epoch{epoch+1}.pth")
 			torch.save({
 				'epoch': epoch,
+				'model': model.state_dict(),
 				'optimizer': optimizer.state_dict(),
 				'scheduler': scheduler.state_dict()
 			}, save_path)
