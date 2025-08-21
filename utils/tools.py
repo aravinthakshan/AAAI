@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from math import sqrt
 
-# this prints model complexity in terms of FLOPs and number of parameters excluding the backbone
+# this prints model complexity in terms of FLOPs and number of parameters excluding the backbone ( sub -3595388)
 def get_model_complexity(model, inputs, round=3):
     """
     Modified according to https://github.com/GewelsJI/SINet-V2/blob/main/utils/utils.py
@@ -10,7 +10,7 @@ def get_model_complexity(model, inputs, round=3):
     from thop import profile, clever_format
     flops, params = profile(model, inputs=inputs)
     if round is not None:
-        flops, params = clever_format([flops, params-3595388], f"%.{round}f")
+        flops, params = clever_format([flops, params], f"%.{round}f")
         return flops, params
     return int(flops), int(params)
 

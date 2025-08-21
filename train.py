@@ -56,12 +56,18 @@ def train():
 		# if (epoch+1) % 5 == 0 or epoch == cfg.epochs-1:
 		# 	torch.save(model.state_dict(),  f'save_pth/epoch_{epoch+1}.pth') # /kaggle/working/
 		save_dir = "/kaggle/working/models"
+		save_path = "kaggle/working/other"
 		os.makedirs(save_dir, exist_ok=True)
 
 		if (epoch + 1) % 5 == 0 or epoch == cfg.epochs - 1:
 			save_path = os.path.join(save_dir, f"FINet.pth")
 			torch.save(model.state_dict(), save_path)
-
+			torch.save({
+				'epoch': epoch,
+				'optimizer': optimizer.state_dict(),
+				'scheduler': scheduler.state_dict()
+			}, save_path)
+			print(f"Checkpoint saved at {save_path}")
 
 if __name__ == '__main__':
 	seed = 123456
@@ -78,6 +84,14 @@ if __name__ == '__main__':
 	from Model.FINet import FINet
 	model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
 	# model = FINet(backbone='tinynet-a', channels=(8,24,32,64)).to(cfg.device)
+
+	checkpoint_path = "save_pth/epoch_50.pth"
+
+	if checkpoint_path is not None:
+		print(f"Loading model weights from {checkpoint_path}...")
+		state_dict = torch.load(checkpoint_path, map_location=cfg.device)
+		model.load_state_dict(state_dict)
+		print("Model loaded successfully!")
 
 	train_dataset = TrainDataset(image_root=cfg.dp.train_imgs, gt_root=cfg.dp.train_masks, trainsize=cfg.trainsize,
 	                             edge_root=None)

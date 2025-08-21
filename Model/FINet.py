@@ -257,3 +257,7 @@ if __name__ == '__main__':
     print(f"Output 2 shape: {out2.shape}")
     print(f"Output 3 shape: {out3.shape}")
     print(f"Output 4 shape: {out4.shape}")
+
+
+# Original 3.74 M 
+# Modified 3.989 M

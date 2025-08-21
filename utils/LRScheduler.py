@@ -32,6 +32,21 @@ class CosineDecay:
 	def get_lr(self):
 		return self.current_lr
 
+    # === Added for checkpointing ===
+	def state_dict(self):
+		return {
+            "cnt": self.cnt,
+            "current_lr": self.current_lr
+        }
+	
+	def load_state_dict(self, state_dict):
+		self.cnt = state_dict["cnt"]
+		self.current_lr = state_dict["current_lr"]
+
+        # restore lr to optimizer
+		if not self.test_mode and self.optimizer is not None:
+			for param_group in self.optimizer.param_groups:
+				param_group['lr'] = self.current_lr
 
 if __name__ == '__main__':
 	import matplotlib.pyplot as plt
