@@ -7,7 +7,7 @@ import cv2
 from Model.FINet import FINet
 from config import Config
 from utils.dataloader_freq import TestDataset
-
+import argparse
 
 def inference(datasets):
 	global model, cfg
@@ -37,22 +37,35 @@ def inference(datasets):
 import glob
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="FINet Inference Script")
+    parser.add_argument('--ckpt', type=str, default=None,
+                        help="Path to a specific checkpoint. If not provided, loads the latest one.")
+    parser.add_argument('--datasets', type=str, nargs='+',
+                        default=['CHAMELEON', 'CAMO', 'COD10K', 'NC4K'],
+                        help="Datasets to run inference on (default: all).")
+    parser.add_argument('--save_dir', type=str, default="/kaggle/working/models",
+                        help="Directory where checkpoints are stored.")
+    args = parser.parse_args()
+
     cfg = Config()
     model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
 
-    save_dir = "/kaggle/working/models"
-    checkpoints = sorted(glob.glob(os.path.join(save_dir, "FINet_epoch*.pth")))
-    if checkpoints:
-        latest_ckpt = checkpoints[-1]
-        checkpoint = torch.load(latest_ckpt, map_location=cfg.device)
-        model.load_state_dict(checkpoint['model'])
-        print(f"Loaded latest checkpoint: {latest_ckpt}")
+    # ---- Load checkpoint ----
+    if args.ckpt is not None:
+        checkpoint = torch.load(args.ckpt, map_location=cfg.device)
+        print(f"Loaded checkpoint from {args.ckpt}")
     else:
-        raise FileNotFoundError("No checkpoints found in models folder.")
+        checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "FINet_epoch*.pth")))
+        if checkpoints:
+            latest_ckpt = checkpoints[-1]
+            checkpoint = torch.load(latest_ckpt, map_location=cfg.device)
+            print(f"Loaded latest checkpoint: {latest_ckpt}")
+        else:
+            raise FileNotFoundError("No checkpoints found in models folder.")
 
-    datasets = ['CHAMELEON', 'CAMO', 'COD10K', 'NC4K']
-    inference(datasets)
+    model.load_state_dict(checkpoint['model'])
 
+    inference(args.datasets, model, cfg)
 
 # if __name__ == '__main__':
 # 	pth_path =  '/kaggle/working/models/FINet.pth'
