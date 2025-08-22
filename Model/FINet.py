@@ -177,7 +177,7 @@ class FINet(nn.Module):
         # activation
         self.gelu = nn.GELU()
         # RCCA Block
-        self.rcca_out4 = RCCAModule(channels[3], channels[3]) # might cause dimensions issues.
+        self.rcca_out4 = RCCAModule(channels[3], channels[3], num_classes=1) # might cause dimensions issues.
         # decoder
         self.deconv3 = DeBlock(channels[3], channels[2]) # decoder replaced with new deblock from the new attention mechanism
         self.deconv2 = DeBlock(channels[2], channels[1])
