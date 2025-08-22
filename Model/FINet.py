@@ -205,7 +205,6 @@ class FINet(nn.Module):
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
 
-        x1 = self.rcca_out1(x1) # added rcca here
         x2 = self.rcca_out2(x2) # added rcca here
         x3 = self.rcca_out3(x3) # added rcca here
         # RCCA Block, this could add lots of overhead remove later
