@@ -178,6 +178,10 @@ class FINet(nn.Module):
         self.gelu = nn.GELU()
         # RCCA Block
         self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
+        self.rcca_out1 = RCCAModule(channels[0]) # might cause dimensions issues.
+        self.rcca_out2 = RCCAModule(channels[1]) # might cause dimensions issues.
+        self.rcca_out3 = RCCAModule(channels[2]) # might cause dimensions issues.
+
         # decoder
         self.deconv3 = DeBlock(channels[3], channels[2]) # decoder replaced with new deblock from the new attention mechanism
         self.deconv2 = DeBlock(channels[2], channels[1])
@@ -212,9 +216,9 @@ class FINet(nn.Module):
         out1 = self.gelu(
             self.deconv1(F.interpolate(out2, size=x1.shape[2:], mode='bilinear', align_corners=False)) + x1)
 
-        out3 = self.rcca_out4(out3) # assuming num_classes=1 for binary segmentation
-        out2 = self.rcca_out4(out2) # assuming num_classes=1 for binary segmentation
-        out1 = self.rcca_out4(out1) # assuming num_classes=1 for binary segmentation
+        out3 = self.rcca_out3(out3) # assuming num_classes=1 for binary segmentation
+        out2 = self.rcca_out2(out2) # assuming num_classes=1 for binary segmentation
+        out1 = self.rcca_out1(out1) # assuming num_classes=1 for binary segmentation
 
         out1 = self.out_conv1(out1)
         out2 = self.out_conv2(out2)
