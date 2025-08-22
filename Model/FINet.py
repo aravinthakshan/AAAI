@@ -179,7 +179,8 @@ class FINet(nn.Module):
         # RCCA Block
         self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
         self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
-
+        self.rcca_out2 = RCCAModule(channels[1])
+        self.rcca_out1 = RCCAModule(channels[0])
         # decoder
         self.deconv3 = DeBlock(channels[3], channels[2]) # decoder replaced with new deblock from the new attention mechanism
         self.deconv2 = DeBlock(channels[2], channels[1])
@@ -204,7 +205,7 @@ class FINet(nn.Module):
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
 
-        x3 = self.rcca_out3(x3)
+        x3 = self.rcca_out3(x3) # added rcca here
         # RCCA Block, this could add lots of overhead remove later
         out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
 
@@ -212,9 +213,8 @@ class FINet(nn.Module):
         # out3 = self.gelu(
         #     self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
 
-        f3 = F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)
-
-        out3 = self.gelu(self.deconv3(f3) + x3)
+        out3 = self.gelu(
+            self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
         out2 = self.gelu(
             self.deconv2(F.interpolate(out3, size=x2.shape[2:], mode='bilinear', align_corners=False)) + x2)
         out1 = self.gelu(
