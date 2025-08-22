@@ -229,35 +229,44 @@ class FINet(nn.Module):
 
 
 if __name__ == '__main__':
-    from utils.tools import get_model_complexity
+    # Select device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = FINet(backbone='efficientb0', channels=(8,24,32,64))
-    model.to(device=device)  # Move model to GPU if available
-    # model = FINet(backbone='tinynet-a', channels=(8,24,32,64))
-    flops, params = get_model_complexity(model, inputs=(torch.randn(size=(1, 3, 384, 384)),
-                                                        torch.randn(size=(1, 96, 48, 48)),
-                                                        torch.randn(size=(1, 96, 48, 48))),
-                                         round=3)
-    print(params, flops)
-    
-    model.eval()  # Set to evaluation mode
+    print(f"Using device: {device}")
 
-    # Create sample input tensors
+    # Initialize model and move to device
+    model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(device)
+    # model = FINet(backbone='tinynet-a', channels=(8,24,32,64)).to(device)
+
+    # Compute FLOPs and Params
+    flops, params = get_model_complexity(
+        model,
+        inputs=(
+            torch.randn(1, 3, 384, 384, device=device),
+            torch.randn(1, 96, 48, 48, device=device),
+            torch.randn(1, 96, 48, 48, device=device),
+        ),
+        round=3
+    )
+    print(f"Params: {params}, FLOPs: {flops}")
+
+    # Evaluation mode
+    model.eval()
+
+    # Input sizes
     batch_size = 1
     input_height, input_width = 384, 384
     freq_height, freq_width = 48, 48
 
-    # Main input tensor (RGB image)
+    # Create sample inputs directly on device
     x = torch.randn(batch_size, 3, input_height, input_width, device=device)
-    # High and low frequency tensors (96 channels each)
     high = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
     low = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
 
-    # Forward pass through the model
-    with torch.no_grad():  # Disable gradients for inference
+    # Forward pass
+    with torch.no_grad():
         out1, out2, out3, out4 = model(x, high, low)
 
-    # Print output shapes
+    # Print shapes
     print(f"Input shape: {x.shape}")
     print(f"High freq shape: {high.shape}")
     print(f"Low freq shape: {low.shape}")
@@ -266,6 +275,47 @@ if __name__ == '__main__':
     print(f"Output 3 shape: {out3.shape}")
     print(f"Output 4 shape: {out4.shape}")
 
+# Original: 3.74 M 
+# Modified: 3.989 M
 
-# Original 3.74 M 
-# Modified 3.989 M
+# if __name__ == '__main__':
+#     from utils.tools import get_model_complexity
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     model = FINet(backbone='efficientb0', channels=(8,24,32,64))
+#     model.to(device=device)  # Move model to GPU if available
+#     # model = FINet(backbone='tinynet-a', channels=(8,24,32,64))
+#     flops, params = get_model_complexity(model, inputs=(torch.randn(size=(1, 3, 384, 384)),
+#                                                         torch.randn(size=(1, 96, 48, 48)),
+#                                                         torch.randn(size=(1, 96, 48, 48))),
+#                                          round=3)
+#     print(params, flops)
+    
+#     model.eval()  # Set to evaluation mode
+
+#     # Create sample input tensors
+#     batch_size = 1
+#     input_height, input_width = 384, 384
+#     freq_height, freq_width = 48, 48
+
+#     # Main input tensor (RGB image)
+#     x = torch.randn(batch_size, 3, input_height, input_width, device=device)
+#     # High and low frequency tensors (96 channels each)
+#     high = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
+#     low = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
+
+#     # Forward pass through the model
+#     with torch.no_grad():  # Disable gradients for inference
+#         out1, out2, out3, out4 = model(x, high, low)
+
+#     # Print output shapes
+#     print(f"Input shape: {x.shape}")
+#     print(f"High freq shape: {high.shape}")
+#     print(f"Low freq shape: {low.shape}")
+#     print(f"Output 1 shape: {out1.shape}")
+#     print(f"Output 2 shape: {out2.shape}")
+#     print(f"Output 3 shape: {out3.shape}")
+#     print(f"Output 4 shape: {out4.shape}")
+
+
+# # Original 3.74 M 
+# # Modified 3.989 M
