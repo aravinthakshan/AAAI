@@ -152,7 +152,7 @@ class TrainDataset(Dataset):
         return high, low
 
     def __len__(self):
-        return 100
+        # return 100
         return self.size
 
 
