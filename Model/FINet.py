@@ -230,6 +230,8 @@ class FINet(nn.Module):
 
 if __name__ == '__main__':
     # Select device
+    from utils.tools import get_model_complexity
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
