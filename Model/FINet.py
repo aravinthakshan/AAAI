@@ -234,11 +234,11 @@ if __name__ == '__main__':
     model = FINet(backbone='efficientb0', channels=(8,24,32,64))
     model.to(device=device)  # Move model to GPU if available
     # model = FINet(backbone='tinynet-a', channels=(8,24,32,64))
-    # flops, params = get_model_complexity(model, inputs=(torch.randn(size=(1, 3, 384, 384)),
-    #                                                     torch.randn(size=(1, 96, 48, 48)),
-    #                                                     torch.randn(size=(1, 96, 48, 48))),
-    #                                      round=3)
-    # print(params, flops)
+    flops, params = get_model_complexity(model, inputs=(torch.randn(size=(1, 3, 384, 384)),
+                                                        torch.randn(size=(1, 96, 48, 48)),
+                                                        torch.randn(size=(1, 96, 48, 48))),
+                                         round=3)
+    print(params, flops)
     
     model.eval()  # Set to evaluation mode
 
