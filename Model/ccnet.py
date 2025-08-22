@@ -96,31 +96,84 @@ class PSPModule(nn.Module):
         bottle = self.bottleneck(torch.cat(priors, 1))
         return bottle
 
+import torch
+import torch.nn as nn
+
+# If you don't have InPlaceABNSync, uncomment the two lines below
+# and replace InPlaceABNSync with BNReLU in the module.
+# class BNReLU(nn.Module):
+#     def __init__(self, c): super().__init__(); self.bn=nn.BatchNorm2d(c); self.act=nn.ReLU(inplace=True)
+#     def forward(self, x): return self.act(self.bn(x))
+
 class RCCAModule(nn.Module):
-    def __init__(self, in_channels, out_channels, num_classes):
-        super(RCCAModule, self).__init__()
-        inter_channels = in_channels // 4
-        self.conva = nn.Sequential(nn.Conv2d(in_channels, inter_channels, 3, padding=1, bias=False),
-                                   InPlaceABNSync(inter_channels))
+    """
+    Shape-preserving RCCA block.
+    Input:  [B, in_channels, H, W]
+    Output: [B, in_channels, H, W]
+    """
+    def __init__(self, in_channels, reduction_ratio=4, recurrence=2):
+        super().__init__()
+        inter_channels = max(1, in_channels // reduction_ratio)
+
+        self.conva = nn.Sequential(
+            nn.Conv2d(in_channels, inter_channels, 3, padding=1, bias=False),
+            InPlaceABNSync(inter_channels)  # or BNReLU(inter_channels)
+        )
+
         self.cca = CrissCrossAttention(inter_channels)
-        self.convb = nn.Sequential(nn.Conv2d(inter_channels, inter_channels, 3, padding=1, bias=False),
-                                   InPlaceABNSync(inter_channels))
+        self.recurrence = recurrence
 
+        self.convb = nn.Sequential(
+            nn.Conv2d(inter_channels, inter_channels, 3, padding=1, bias=False),
+            InPlaceABNSync(inter_channels)  # or BNReLU(inter_channels)
+        )
+
+        # Bottleneck now fuses [x, rcca_features] back to in_channels (no classifier)
         self.bottleneck = nn.Sequential(
-            nn.Conv2d(in_channels+inter_channels, out_channels, kernel_size=3, padding=1, dilation=1, bias=False),
-            InPlaceABNSync(out_channels),
-            nn.Dropout2d(0.1),
-            nn.Conv2d(512, num_classes, kernel_size=1, stride=1, padding=0, bias=True)
-            )
+            nn.Conv2d(in_channels + inter_channels, in_channels, kernel_size=3, padding=1, bias=False),
+            InPlaceABNSync(in_channels)  # or BNReLU(in_channels)
+        )
 
-    def forward(self, x, recurrence=2):
-        output = self.conva(x)
-        for i in range(recurrence):
-            output = self.cca(output)
-        output = self.convb(output)
+        # Final residual to stabilize
+        self.residual = True
 
-        output = self.bottleneck(torch.cat([x, output], 1))
-        return output
+    def forward(self, x):
+        y = self.conva(x)
+        for _ in range(self.recurrence):
+            y = self.cca(y) + y            # residual per loop
+        y = self.convb(y)
+
+        out = self.bottleneck(torch.cat([x, y], dim=1))
+        if self.residual:
+            out = out + x
+        return out
+
+
+# class RCCAModule(nn.Module):
+#     def __init__(self, in_channels, out_channels, num_classes):
+#         super(RCCAModule, self).__init__()
+#         inter_channels = in_channels // 4
+#         self.conva = nn.Sequential(nn.Conv2d(in_channels, inter_channels, 3, padding=1, bias=False),
+#                                    InPlaceABNSync(inter_channels))
+#         self.cca = CrissCrossAttention(inter_channels)
+#         self.convb = nn.Sequential(nn.Conv2d(inter_channels, inter_channels, 3, padding=1, bias=False),
+#                                    InPlaceABNSync(inter_channels))
+
+#         self.bottleneck = nn.Sequential(
+#             nn.Conv2d(in_channels+inter_channels, out_channels, kernel_size=3, padding=1, dilation=1, bias=False),
+#             InPlaceABNSync(out_channels),
+#             nn.Dropout2d(0.1),
+#             nn.Conv2d(512, num_classes, kernel_size=1, stride=1, padding=0, bias=True)
+#             )
+
+#     def forward(self, x, recurrence=2):
+#         output = self.conva(x)
+#         for i in range(recurrence):
+#             output = self.cca(output)
+#         output = self.convb(output)
+
+#         output = self.bottleneck(torch.cat([x, output], 1))
+#         return output
 
 # class ResNet(nn.Module):
 #     def __init__(self, block, layers, num_classes, criterion, recurrence):
