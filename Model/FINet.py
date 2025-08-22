@@ -5,7 +5,7 @@ from Model.EfficientNet import EfficientNet_B0
 from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
 from Model.Replacements import FSM_FFM
-
+from Model.ccnet import RCCAModule  
 # replace with DSC - Ghost - Convs
 class DeBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -176,7 +176,9 @@ class FINet(nn.Module):
         self.ffm4 = FSM_FFM(channels[3])
         # activation
         self.gelu = nn.GELU()
-        # decoder:
+        # RCCA Block
+        self.rcca_out4 = RCCAModule(channels[3], channels[3]) # might cause dimensions issues.
+        # decoder
         self.deconv3 = DeBlock(channels[3], channels[2]) # decoder replaced with new deblock from the new attention mechanism
         self.deconv2 = DeBlock(channels[2], channels[1])
         self.deconv1 = DeBlock(channels[1], channels[0])
@@ -198,6 +200,9 @@ class FINet(nn.Module):
         x2 = self.ffm2(x=x2, high=high, low=low)
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
+
+        # RCCA Block 
+        out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
         # decoding
         out3 = self.gelu(
             self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
