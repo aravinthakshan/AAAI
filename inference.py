@@ -65,7 +65,7 @@ if __name__ == '__main__':
 
     model.load_state_dict(checkpoint['model'])
 
-    inference(args.datasets, model, cfg)
+    inference(args.datasets)
 
 # if __name__ == '__main__':
 # 	pth_path =  '/kaggle/working/models/FINet.pth'
