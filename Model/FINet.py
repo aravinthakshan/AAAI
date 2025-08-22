@@ -213,7 +213,7 @@ class FINet(nn.Module):
         #     self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
 
         f3 = F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)
-        
+
         out3 = self.gelu(self.deconv3(f3) + x3)
         out2 = self.gelu(
             self.deconv2(F.interpolate(out3, size=x2.shape[2:], mode='bilinear', align_corners=False)) + x2)
@@ -283,6 +283,7 @@ if __name__ == '__main__':
     print(f"Output 3 shape: {out3.shape}")
     print(f"Output 4 shape: {out4.shape}")
 
-# # Original        3.74  M 
-# # Modified        3.989 M
-# # Cross Attention 4.047 M
+# # Original                 3.74  M 
+# # Modified                 3.989 M
+# # Cross Attention          4.047 M
+# # Cross Attention for 3+4  4.062 M
