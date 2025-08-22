@@ -227,15 +227,16 @@ class FINet(nn.Module):
 
 if __name__ == '__main__':
     from utils.tools import get_model_complexity
-
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = FINet(backbone='efficientb0', channels=(8,24,32,64))
+    model.to(device=device)  # Move model to GPU if available
     # model = FINet(backbone='tinynet-a', channels=(8,24,32,64))
-    flops, params = get_model_complexity(model, inputs=(torch.randn(size=(1, 3, 384, 384)),
-                                                        torch.randn(size=(1, 96, 48, 48)),
-                                                        torch.randn(size=(1, 96, 48, 48))),
-                                         round=3)
-    print(params, flops)
-
+    # flops, params = get_model_complexity(model, inputs=(torch.randn(size=(1, 3, 384, 384)),
+    #                                                     torch.randn(size=(1, 96, 48, 48)),
+    #                                                     torch.randn(size=(1, 96, 48, 48))),
+    #                                      round=3)
+    # print(params, flops)
+    
     model.eval()  # Set to evaluation mode
 
     # Create sample input tensors
@@ -244,11 +245,10 @@ if __name__ == '__main__':
     freq_height, freq_width = 48, 48
 
     # Main input tensor (RGB image)
-    x = torch.randn(batch_size, 3, input_height, input_width)
-
+    x = torch.randn(batch_size, 3, input_height, input_width, device=device)
     # High and low frequency tensors (96 channels each)
-    high = torch.randn(batch_size, 96, freq_height, freq_width)
-    low = torch.randn(batch_size, 96, freq_height, freq_width)
+    high = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
+    low = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
 
     # Forward pass through the model
     with torch.no_grad():  # Disable gradients for inference
