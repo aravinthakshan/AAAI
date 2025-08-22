@@ -194,7 +194,7 @@ class TestDataset(Dataset):
 
     def __len__(self):
         return 100
-        return len(self.images)
+        # return len(self.images)
 
     def __getitem__(self, index):
         image = self.rgb_loader(self.images[index])
