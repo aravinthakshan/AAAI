@@ -203,9 +203,6 @@ class FINet(nn.Module):
 
         # RCCA Block, this could add lots of overhead remove later
         out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
-        out3 = self.rcca_out4(out3) # assuming num_classes=1 for binary segmentation
-        out2 = self.rcca_out4(out2) # assuming num_classes=1 for binary segmentation
-        out1 = self.rcca_out4(out1) # assuming num_classes=1 for binary segmentation
 
         # decoding
         out3 = self.gelu(
@@ -214,6 +211,10 @@ class FINet(nn.Module):
             self.deconv2(F.interpolate(out3, size=x2.shape[2:], mode='bilinear', align_corners=False)) + x2)
         out1 = self.gelu(
             self.deconv1(F.interpolate(out2, size=x1.shape[2:], mode='bilinear', align_corners=False)) + x1)
+
+        out3 = self.rcca_out4(out3) # assuming num_classes=1 for binary segmentation
+        out2 = self.rcca_out4(out2) # assuming num_classes=1 for binary segmentation
+        out1 = self.rcca_out4(out1) # assuming num_classes=1 for binary segmentation
 
         out1 = self.out_conv1(out1)
         out2 = self.out_conv2(out2)
