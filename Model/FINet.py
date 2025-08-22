@@ -178,6 +178,7 @@ class FINet(nn.Module):
         self.gelu = nn.GELU()
         # RCCA Block
         self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
+        self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
 
         # decoder
         self.deconv3 = DeBlock(channels[3], channels[2]) # decoder replaced with new deblock from the new attention mechanism
@@ -203,12 +204,17 @@ class FINet(nn.Module):
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
 
+        x3 = self.rcca_out3(x3)
         # RCCA Block, this could add lots of overhead remove later
         out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
 
         # decoding
-        out3 = self.gelu(
-            self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
+        # out3 = self.gelu(
+        #     self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
+
+        f3 = F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)
+        
+        out3 = self.gelu(self.deconv3(f3) + x3)
         out2 = self.gelu(
             self.deconv2(F.interpolate(out3, size=x2.shape[2:], mode='bilinear', align_corners=False)) + x2)
         out1 = self.gelu(
@@ -277,47 +283,6 @@ if __name__ == '__main__':
     print(f"Output 3 shape: {out3.shape}")
     print(f"Output 4 shape: {out4.shape}")
 
-# Original: 3.74 M 
-# Modified: 3.989 M
-
-# if __name__ == '__main__':
-#     from utils.tools import get_model_complexity
-#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#     model = FINet(backbone='efficientb0', channels=(8,24,32,64))
-#     model.to(device=device)  # Move model to GPU if available
-#     # model = FINet(backbone='tinynet-a', channels=(8,24,32,64))
-#     flops, params = get_model_complexity(model, inputs=(torch.randn(size=(1, 3, 384, 384)),
-#                                                         torch.randn(size=(1, 96, 48, 48)),
-#                                                         torch.randn(size=(1, 96, 48, 48))),
-#                                          round=3)
-#     print(params, flops)
-    
-#     model.eval()  # Set to evaluation mode
-
-#     # Create sample input tensors
-#     batch_size = 1
-#     input_height, input_width = 384, 384
-#     freq_height, freq_width = 48, 48
-
-#     # Main input tensor (RGB image)
-#     x = torch.randn(batch_size, 3, input_height, input_width, device=device)
-#     # High and low frequency tensors (96 channels each)
-#     high = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
-#     low = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
-
-#     # Forward pass through the model
-#     with torch.no_grad():  # Disable gradients for inference
-#         out1, out2, out3, out4 = model(x, high, low)
-
-#     # Print output shapes
-#     print(f"Input shape: {x.shape}")
-#     print(f"High freq shape: {high.shape}")
-#     print(f"Low freq shape: {low.shape}")
-#     print(f"Output 1 shape: {out1.shape}")
-#     print(f"Output 2 shape: {out2.shape}")
-#     print(f"Output 3 shape: {out3.shape}")
-#     print(f"Output 4 shape: {out4.shape}")
-
-
-# # Original 3.74 M 
-# # Modified 3.989 M
+# # Original        3.74  M 
+# # Modified        3.989 M
+# # Cross Attention 4.047 M
