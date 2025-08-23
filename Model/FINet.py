@@ -4,8 +4,9 @@ import torch.nn.functional as F
 from Model.EfficientNet import EfficientNet_B0
 from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
-from Model.Replacements import FSM_FFM
+from Model.Replacements import FSM_FFM, CRM
 from Model.ccnet import RCCAModule  
+
 # replace with DSC - Ghost - Convs
 class DeBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -147,91 +148,112 @@ class FFM(nn.Module): # This is the FIM, it takes input from the encoder and hig
 
 
 class FINet(nn.Module):
+    def __init__(self, backbone='efficientb0', channels=(8, 12, 24, 48)):
+        super().__init__()
 
-    def __init__(self, backbone='efficientb0', channels=(8,12,24,48)):
-        super(FINet, self).__init__()
-
+        # Backbone
         if backbone == 'efficientb0':
-            self.encoder = EfficientNet_B0() # this is just being used as an encoder 
+            self.encoder = EfficientNet_B0()
         elif backbone == 'tinynet-a':
             self.encoder = TinyNetA()
         else:
-            print('backbone error')
-            return
+            raise ValueError('Unsupported backbone')
 
-        stage_channels = self.encoder.get_stage_channels() # returns [16, 24, 40, 112, 320]
-        # reduction
-        self.re_conv1 = ConvBNGeLU(in_channels=stage_channels[1], out_channels=channels[0], kernel_size=1) 
-        self.re_conv2 = ConvBNGeLU(in_channels=stage_channels[2], out_channels=channels[1], kernel_size=1)
-        self.re_conv3 = ConvBNGeLU(in_channels=stage_channels[3], out_channels=channels[2], kernel_size=1)
-        self.re_conv4 = ConvBNGeLU(in_channels=stage_channels[4], out_channels=channels[3], kernel_size=1)
-        # frequency fusion, initialized with necessary channels
-        # self.ffm1 = FFM(channels[0]) 
-        # self.ffm2 = FFM(channels[1])
-        # self.ffm3 = FFM(channels[2])
-        # self.ffm4 = FFM(channels[3])
-        self.ffm1 = FSM_FFM(channels[0])
+        stage_channels = self.encoder.get_stage_channels()  # [16, 24, 40, 112, 320]
+
+        # 1x1 reductions to target channels
+        self.re_conv1 = ConvBNGeLU(stage_channels[1], channels, kernel_size=1)
+        self.re_conv2 = ConvBNGeLU(stage_channels[2], channels[1], kernel_size=1)
+        self.re_conv3 = ConvBNGeLU(stage_channels[3], channels[2], kernel_size=1)
+        self.re_conv4 = ConvBNGeLU(stage_channels[4], channels[3], kernel_size=1)
+
+        # FSM/FFM (feature modulation + frequency injection)
+        self.ffm1 = FSM_FFM(channels)
         self.ffm2 = FSM_FFM(channels[1])
         self.ffm3 = FSM_FFM(channels[2])
         self.ffm4 = FSM_FFM(channels[3])
-        # activation
-        self.gelu = nn.GELU()
-        # RCCA Block
-        self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
-        self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
-        self.rcca_out2 = RCCAModule(channels[1])
-        self.rcca_out1 = RCCAModule(channels[0])
-        # decoder
-        self.deconv3 = DeBlock(channels[3], channels[2]) # decoder replaced with new deblock from the new attention mechanism
-        self.deconv2 = DeBlock(channels[2], channels[1])
-        self.deconv1 = DeBlock(channels[1], channels[0])
-        # out conv
-        self.out_conv1 = nn.Conv2d(channels[0], 1, kernel_size=3, padding=1)
+
+        # RCCA on deep/mid
+        self.rcca_out4 = RCCAModule(channels[3])
+        self.rcca_out3 = RCCAModule(channels[2])
+
+        # Paper-style CRM blocks (three stages, cross-scale)
+        # Each CRM returns (refined_feature, side_pred)
+        self.crm4 = CRM(channels[3], make_side_head=True)  # Stage 4: (x4′, None) -> P1
+        self.crm3 = CRM(channels[2], make_side_head=True)  # Stage 3: (x3′, up(F4)) -> P2
+        self.crm2 = CRM(channels[1], make_side_head=True)  # Stage 2: (x2′, up(F3)) -> P3
+
+        # Decoder
+        self.deconv3 = DeBlock(channels[3], channels[2])  # up(F4) + F3 -> out3
+        self.deconv2 = DeBlock(channels[2], channels[1])  # up(out3) + F2 -> out2
+        self.deconv1 = DeBlock(channels[1], channels)  # up(out2) + x1 -> out1
+
+        # Output heads at each decoder stage (keep your original heads)
+        self.out_conv1 = nn.Conv2d(channels, 1, kernel_size=3, padding=1)
         self.out_conv2 = nn.Conv2d(channels[1], 1, kernel_size=3, padding=1)
         self.out_conv3 = nn.Conv2d(channels[2], 1, kernel_size=3, padding=1)
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
+        self.act = nn.GELU()
 
     def forward(self, x, high, low):
-        _, x1, x2, x3, x4 = self.encoder(x)
-        # channel reduction to 64
-        x1 = self.re_conv1(x1)
-        x2 = self.re_conv2(x2)
-        x3 = self.re_conv3(x3)
-        x4 = self.re_conv4(x4)
-        # frequency fusion comes from def freq_decompose(self, freq) in dataloader
-        x1 = self.ffm1(x=x1, high=high, low=low)
-        x2 = self.ffm2(x=x2, high=high, low=low)
-        x3 = self.ffm3(x=x3, high=high, low=low)
-        out4 = self.ffm4(x=x4, high=high, low=low)
+        # Backbone features
+        _, f1, f2, f3, f4 = self.encoder(x)  # stages 1..4 (we ignore stage0/stem)
 
-        x3 = self.rcca_out3(x3) # added rcca here
-        # RCCA Block, this could add lots of overhead remove later
-        out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
+        # Channel reduction
+        x1 = self.re_conv1(f1)
+        x2 = self.re_conv2(f2)
+        x3 = self.re_conv3(f3)
+        x4 = self.re_conv4(f4)
 
-        # decoding
-        # out3 = self.gelu(
-        #     self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
+        # FSM/FFM modulation
+        x1p = self.ffm1(x=x1, high=high, low=low)   # H/4
+        x2p = self.ffm2(x=x2, high=high, low=low)   # H/8
+        x3p = self.ffm3(x=x3, high=high, low=low)   # H/16
+        x4p = self.ffm4(x=x4, high=high, low=low)   # H/32 or H/16 depending on encoder stride
 
-        out3 = self.gelu(
-            self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
-        out2 = self.gelu(
-            self.deconv2(F.interpolate(out3, size=x2.shape[2:], mode='bilinear', align_corners=False)) + x2)
-        out1 = self.gelu(
-            self.deconv1(F.interpolate(out2, size=x1.shape[2:], mode='bilinear', align_corners=False)) + x1)
+        # CRM at Stage 4 (coarsest): (x4′, None)
+        F4, P1 = self.crm4(x4p, None)
+        # Optional RCCA at deep feature
+        F4 = self.rcca_out4(F4)
 
-        out1 = self.out_conv1(out1)
-        out2 = self.out_conv2(out2)
-        out3 = self.out_conv3(out3)
-        out4 = self.out_conv4(out4)
+        # CRM at Stage 3 (cross-scale with up(F4))
+        up4 = F.interpolate(F4, size=x3p.shape[2:], mode='bilinear', align_corners=False)
+        F3, P2 = self.crm3(x3p, up4)
+        F3 = self.rcca_out3(F3)
 
-        size = (out1.shape[2] * 4, out1.shape[3] * 4)
-        out1 = F.interpolate(out1, size=size, mode='bilinear', align_corners=False)
-        out2 = F.interpolate(out2, size=size, mode='bilinear', align_corners=False)
-        out3 = F.interpolate(out3, size=size, mode='bilinear', align_corners=False)
-        out4 = F.interpolate(out4, size=size, mode='bilinear', align_corners=False)
+        # CRM at Stage 2 (cross-scale with up(F3))
+        up3 = F.interpolate(F3, size=x2p.shape[2:], mode='bilinear', align_corners=False)
+        F2, P3 = self.crm2(x2p, up3)
 
-        return out1, out2, out3, out4
+        # Decoder fusions (use refined features)
+        out3 = self.act(self.deconv3(F.interpolate(F4, size=F3.shape[2:], mode='bilinear', align_corners=False)) + F3)
+        out2 = self.act(self.deconv2(F.interpolate(out3, size=F2.shape[2:], mode='bilinear', align_corners=False)) + F2)
+        out1 = self.act(self.deconv1(F.interpolate(out2, size=x1p.shape[2:], mode='bilinear', align_corners=False)) + x1p)
+
+        # Decoder heads
+        y1 = self.out_conv1(out1)                 # H/4
+        y2 = self.out_conv2(out2)                 # H/8
+        y3 = self.out_conv3(out3)                 # H/16
+        y4 = self.out_conv4(F4)                   # H/16 (deep)
+
+        # Upsample all to a common size for loss/metrics
+        final_h = y1.shape[2] * 4
+        final_w = y1.shape[3] * 4
+        size = (final_h, final_w)
+
+        y1 = F.interpolate(y1, size=size, mode='bilinear', align_corners=False)
+        y2 = F.interpolate(y2, size=size, mode='bilinear', align_corners=False)
+        y3 = F.interpolate(y3, size=size, mode='bilinear', align_corners=False)
+        y4 = F.interpolate(y4, size=size, mode='bilinear', align_corners=False)
+
+        # Auxiliary heads from CRM (P1 at Stage4, P2 at Stage3, P3 at Stage2)
+        P1 = F.interpolate(P1, size=size, mode='bilinear', align_corners=False)
+        P2 = F.interpolate(P2, size=size, mode='bilinear', align_corners=False)
+        P3 = F.interpolate(P3, size=size, mode='bilinear', align_corners=False)
+
+        # Return decoder outputs plus CRM side heads for supervision
+        return y1, y2, y3, y4, P1, P2, P3
 
 
 if __name__ == '__main__':
@@ -272,7 +294,7 @@ if __name__ == '__main__':
 
     # Forward pass
     with torch.no_grad():
-        out1, out2, out3, out4 = model(x, high, low)
+        out1, out2, out3, out4, _, _, _ = model(x, high, low)
 
     # Print shapes
     print(f"Input shape: {x.shape}")
@@ -283,7 +305,7 @@ if __name__ == '__main__':
     print(f"Output 3 shape: {out3.shape}")
     print(f"Output 4 shape: {out4.shape}")
 
-# # Original                 3.74  M 
+# # Original                 3.740 M 
 # # Modified                 3.989 M
-# # Cross Attention          4.047 M
-# # Cross Attention for 3+4  4.062 M
+# # Cross Attention          4.047 M 
+# # TinyCod                  4.720 M

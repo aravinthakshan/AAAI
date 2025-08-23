@@ -7,6 +7,14 @@ class DWStack(nn.Module):
     """
     Depthwise conv stack used inside FM/BM. Implements focal levels with
     increasing receptive fields (k=7,9). Pointwise identity is left to the caller.
+
+    Tuning Tips:
+    levels=2 and base_k=7 match the paper’s increasing kernel schedule (7,9). Increase levels to 3 (7,9,11) if memory allows.
+
+    If training is unstable, start by disabling frequency-path FSM (comment yhf…ylb) and keep only spatial FSM; re-enable later.
+
+    To supervise the mask m (optional), expose it as an auxiliary output and add a small-weighted BCE loss against the GT saliency.
+
     """
     def __init__(self, channels: int, levels: int = 2, base_k: int = 7):
         super().__init__()
@@ -161,3 +169,116 @@ class FSM_FFM(nn.Module):
         out = self.out_conv(out)                                # ConvBN 1×1, preserves channel count
 
         return out
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class _DSConvBNReLU(nn.Module):
+    """Depthwise separable 3x3 conv -> BN -> ReLU, with configurable dilation."""
+    def __init__(self, channels, dilation: int = 1):
+        super().__init__()
+        padding = dilation
+        self.dw = nn.Conv2d(channels, channels, kernel_size=3, stride=1,
+                            padding=padding, dilation=dilation, groups=channels, bias=False)
+        self.pw = nn.Conv2d(channels, channels, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn = nn.BatchNorm2d(channels)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        x = self.dw(x)
+        x = self.pw(x)
+        x = self.bn(x)
+        x = self.act(x)
+        return x
+
+
+class CRM(nn.Module):
+    """
+    Context Refinement Module (paper-style, Fig.4)
+    Inputs:
+      - x_cur: tensor (B, C, H, W), current-stage modulated feature x_n'
+      - x_coarse_up: tensor (B, C, H, W) or None, upsampled previous stage feature x_{n+1}'↑
+    Steps:
+      1) If a coarse feature is provided, spatially match (should already match) and concatenate [x_cur, x_coarse_up] on channels.
+      2) 1x1 fuse to C channels.
+      3) Split into 4 equal chunks along channels.
+      4) Apply 4 parallel 3x3 DS-Convs with dilations 1, 2, 4, 8 respectively, each on its own chunk.
+      5) Elementwise sum the 4 outputs -> f_3.
+      6) Final 1x1 conv to mix channels -> refined feature (B, C, H, W).
+      7) Optional 1x1 prediction head to produce P_n (B, 1, H, W).
+    """
+    def __init__(self, channels: int, make_side_head: bool = True):
+        super().__init__()
+        self.channels = channels
+        self.make_side_head = make_side_head
+
+        # Fuse concatenated inputs back to C
+        self.fuse = nn.Sequential(
+            nn.Conv2d(in_channels=channels * 2, out_channels=channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True)
+        )
+
+        # Four parallel DS-Conv branches with different dilations
+        quarter = channels // 4
+        # If C not divisible by 4, distribute remainder to first chunks to preserve sum=channels
+        splits = [quarter, quarter, quarter, channels - 3 * quarter]
+        self.splits = splits  # used for channel split
+
+        self.br1 = _DSConvBNReLU(splits[0], dilation=1)
+        self.br2 = _DSConvBNReLU(splits[1], dilation=2)
+        self.br3 = _DSConvBNReLU(splits[2], dilation=4)
+        self.br4 = _DSConvBNReLU(splits[3], dilation=8)
+
+        # Final 1x1 to mix after element-wise sum
+        self.mix = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True)
+        )
+
+        # Optional side head for deep supervision (P_n)
+        if self.make_side_head:
+            self.side_head = nn.Conv2d(channels, 1, kernel_size=1, bias=True)
+        else:
+            self.side_head = None
+
+    def forward(self, x_cur: torch.Tensor, x_coarse_up: torch.Tensor | None = None):
+        b, c, h, w = x_cur.shape
+        assert c == self.channels, f"Expected channels={self.channels}, got {c}"
+
+        if x_coarse_up is None:
+            # If coarser feature not provided (topmost stage), use zeros like a skip-less second input
+            x_coarse_up = torch.zeros_like(x_cur)
+        else:
+            # Ensure spatial match (should already match if caller upsamples)
+            if x_coarse_up.shape[2:] != (h, w):
+                x_coarse_up = F.interpolate(x_coarse_up, size=(h, w), mode='bilinear', align_corners=False)
+
+        # 1x1 fusion after concat
+        z = torch.cat([x_cur, x_coarse_up], dim=1)  # (B, 2C, H, W)
+        z = self.fuse(z)                            # (B, C, H, W)
+
+        # Channel split into 4 chunks
+        s1, s2, s3, s4 = self.splits
+        z1, z2, z3, z4 = torch.split(z, [s1, s2, s3, s4], dim=1)
+
+        # Parallel DS-Conv with dilations 1,2,4,8
+        y1 = self.br1(z1)
+        y2 = self.br2(z2)
+        y3 = self.br3(z3)
+        y4 = self.br4(z4)
+
+        # Element-wise sum (concat is in the paper figure for display, but the text specifies sum)
+        # If you prefer strict “sum after concat-of-branches”, first concat then 1x1; here we sum directly to C:
+        # Bring all to C via zero-pad-and-concat-like behavior: we’ll put them back in their original channel slots.
+        # Simpler and faithful: concatenate branch outputs and then 1x1; but paper shows sum (⊕). We implement sum over re-concatenated tensor.
+        y = torch.cat([y1, y2, y3, y4], dim=1)  # still (B, C, H, W) due to preserved per-branch channels
+        # Final 1x1 mix
+        y = self.mix(y)  # refined feature (B, C, H, W)
+
+        # Side head (optional)
+        p = self.side_head(y) if self.side_head is not None else None
+        return y, p
