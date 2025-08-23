@@ -162,7 +162,7 @@ class FINet(nn.Module):
         stage_channels = self.encoder.get_stage_channels()  # [16, 24, 40, 112, 320]
 
         # 1x1 reductions to target channels
-        self.re_conv1 = ConvBNGeLU(stage_channels[1], channels, kernel_size=1)
+        self.re_conv1 = ConvBNGeLU(stage_channels[1], channels[0], kernel_size=1)
         self.re_conv2 = ConvBNGeLU(stage_channels[2], channels[1], kernel_size=1)
         self.re_conv3 = ConvBNGeLU(stage_channels[3], channels[2], kernel_size=1)
         self.re_conv4 = ConvBNGeLU(stage_channels[4], channels[3], kernel_size=1)
