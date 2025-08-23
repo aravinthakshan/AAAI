@@ -168,7 +168,7 @@ class FINet(nn.Module):
         self.re_conv4 = ConvBNGeLU(stage_channels[4], channels[3], kernel_size=1)
 
         # FSM/FFM (feature modulation + frequency injection)
-        self.ffm1 = FSM_FFM(channels)
+        self.ffm1 = FSM_FFM(channels[0])
         self.ffm2 = FSM_FFM(channels[1])
         self.ffm3 = FSM_FFM(channels[2])
         self.ffm4 = FSM_FFM(channels[3])
@@ -186,10 +186,10 @@ class FINet(nn.Module):
         # Decoder
         self.deconv3 = DeBlock(channels[3], channels[2])  # up(F4) + F3 -> out3
         self.deconv2 = DeBlock(channels[2], channels[1])  # up(out3) + F2 -> out2
-        self.deconv1 = DeBlock(channels[1], channels)  # up(out2) + x1 -> out1
+        self.deconv1 = DeBlock(channels[1], channels[0])  # up(out2) + x1 -> out1
 
         # Output heads at each decoder stage (keep your original heads)
-        self.out_conv1 = nn.Conv2d(channels, 1, kernel_size=3, padding=1)
+        self.out_conv1 = nn.Conv2d(channels[0], 1, kernel_size=3, padding=1)
         self.out_conv2 = nn.Conv2d(channels[1], 1, kernel_size=3, padding=1)
         self.out_conv3 = nn.Conv2d(channels[2], 1, kernel_size=3, padding=1)
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
