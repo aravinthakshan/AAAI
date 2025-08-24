@@ -88,6 +88,7 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt', type=str, default=None,
                         help='Path to a specific checkpoint to resume from')
     parser.add_argument('--model', type=str, default='FInet',)
+    parser.add_argument('--trial', action='store_true', default= True)
     args = parser.parse_args()
 
     # ---- Seeding ----
@@ -144,7 +145,7 @@ if __name__ == '__main__':
     checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "FINet_epoch*.pth")))
 
     start_epoch = 0
-    if checkpoints or args.ckpt:
+    if checkpoints and args.trial == True:
         # latest_ckpt = checkpoints[-1]
         latest_ckpt = args.ckpt if args.ckpt else checkpoints[-1]  # last checkpoint or specified
         print(f"Resuming training from checkpoint {latest_ckpt}...")
