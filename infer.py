@@ -10,7 +10,7 @@ from Model.FINet import FINet
 from config import Config
 from utils.dataloader_freq import TestDataset
 from utils.metrics import EvaluationMetrics
-
+from Model.LAFinet import LaplacianFINet
 
 def inference(datasets, save_dir="prediction_maps"):
     global model, cfg
@@ -76,6 +76,8 @@ if __name__ == '__main__':
 
     # ---- Load Config & Model ----
     cfg = Config()
+    if args.model == 'LAFinet':
+        model = LaplacianFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
     model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
 
     # ---- Load checkpoint ----
