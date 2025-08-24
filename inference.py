@@ -45,11 +45,15 @@ if __name__ == '__main__':
                         help="Datasets to run inference on (default: all).")
     parser.add_argument('--save_dir', type=str, default="/kaggle/working/models",
                         help="Directory where checkpoints are stored.")
+    parser.add_argument('--model', type=str, default='FINet',)
     args = parser.parse_args()
 
     cfg = Config()
-    model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
 
+    model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+    if args.model == "LaFINet":
+        from Model.LAFinet import LaFINet
+        model = LaFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
     # ---- Load checkpoint ----
     if args.ckpt is not None:
         checkpoint = torch.load(args.ckpt, map_location=cfg.device)
