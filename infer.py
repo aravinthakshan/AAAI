@@ -83,10 +83,10 @@ if __name__ == '__main__':
 
     # ---- Load checkpoint ----
     if args.ckpt is not None:
-        checkpoint = torch.load(args.ckpt, map_location=cfg.device)
+        checkpoint = torch.load(args.ckpt, map_location=cfg.device, weights_only=False)
         print(f"Loaded checkpoint from {args.ckpt}")
 
-    model.load_state_dict(checkpoint['model'])
+    model.load_state_dict(checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint['model'])
 
     # ---- Run Inference ----
     inference(args.datasets, save_dir=args.pred_dir)
