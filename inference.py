@@ -53,6 +53,7 @@ if __name__ == '__main__':
     model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
     if args.model == "LaFINet":
         from Model.LAFinet import LaFINet
+        print("Using LaFINet model for inference.")
         model = LaFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
     # ---- Load checkpoint ----
     if args.ckpt is not None:
