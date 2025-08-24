@@ -9,23 +9,9 @@ from tqdm import tqdm
 import os
 import glob
 import argparse
+from utils.loss import structure_loss, create_mask_pyramid, lap_structure_loss
 
-def structure_loss(logits, mask):
-    """
-    loss function (ref: F3Net-AAAI-2020)
-    """
-    weit = 1 + 5 * torch.abs(F.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
-    wbce = F.binary_cross_entropy_with_logits(logits, mask, reduction='mean')
-    wbce = (weit * wbce).sum(dim=(2, 3)) / weit.sum(dim=(2, 3))
-
-    pred = torch.sigmoid(logits)
-    inter = ((pred * mask) * weit).sum(dim=(2, 3))
-    union = ((pred + mask) * weit).sum(dim=(2, 3))
-    wiou = 1 - (inter + 1) / (union - inter + 1)
-    return (wbce + wiou).mean()
-
-
-def train(start_epoch=0):
+def train(start_epoch=0, model_name = "LAFInet"):
     global model, train_datald, optimizer, cfg, scheduler
     for epoch in range(start_epoch, cfg.epochs):
         model.train()
@@ -40,11 +26,29 @@ def train(start_epoch=0):
             low = low.to(cfg.device)
 
             out1, out2, out3, out4 = model(img, high, low)
-            loss1 = structure_loss(out1, mask)
-            loss2 = structure_loss(out2, mask)
-            loss3 = structure_loss(out3, mask)
-            loss4 = structure_loss(out4, mask)
-            loss = loss1 + loss2 + loss3 + loss4
+
+            if model_name == "FINet":
+
+                loss1 = structure_loss(out1, mask)
+                loss2 = structure_loss(out2, mask)
+                loss3 = structure_loss(out3, mask)
+                loss4 = structure_loss(out4, mask)
+                loss = loss1 + loss2 + loss3 + loss4
+            else:
+                output_shapes = [
+                out1.shape[2:],  # out1 shape
+                out2.shape[2:],  # out2 shape  
+                out3.shape[2:],  # out3 shape
+                out4.shape[2:]   # out4 shape
+                ]
+                mask_pyramid = create_mask_pyramid(mask, output_shapes)
+                loss1 = lap_structure_loss(out1, mask_pyramid[0])
+                loss2 = lap_structure_loss(out2, mask_pyramid[1])
+                loss3 = lap_structure_loss(out3, mask_pyramid[2])
+                loss4 = lap_structure_loss(out4, mask_pyramid[3])
+
+                loss = 1.0 * loss1 + 0.8 * loss2 + 0.6 * loss3 + 0.4 * loss4
+
             loss.backward()
             optimizer.step()
             loss_iter.append(loss.item())
@@ -67,6 +71,7 @@ def train(start_epoch=0):
             print(f"Checkpoint saved at {save_path}")
 
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train FINet model with options")
     parser.add_argument('--backbone', type=str, default='efficientb0',
@@ -82,6 +87,7 @@ if __name__ == '__main__':
                         help='Directory to save checkpoints')
     parser.add_argument('--ckpt', type=str, default=None,
                         help='Path to a specific checkpoint to resume from')
+    parser.add_argument('--model', type=str, default='FInet',)
     args = parser.parse_args()
 
     # ---- Seeding ----
@@ -98,7 +104,11 @@ if __name__ == '__main__':
 
     # ---- Model ----
     from Model.FINet import FINet
-    model = FINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
+    from Model.LAFinet import LaFINet
+    if args.model == "FINet":
+        model = FINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
+    else:
+        model = LaFINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
 
     # ---- Data ----
     train_dataset = TrainDataset(image_root=cfg.dp.train_imgs,
@@ -147,50 +157,4 @@ if __name__ == '__main__':
     else:
         print("No checkpoint found. Training from scratch.")
 
-    train(start_epoch=start_epoch)
-
-# if __name__ == '__main__':
-#     seed = 123456
-#     random.seed(seed)
-#     np.random.seed(seed)
-#     torch.manual_seed(seed)
-#     torch.cuda.manual_seed(seed)
-#     torch.backends.cudnn.deterministic = True
-#     torch.backends.cudnn.benchmark = False
-#     torch.backends.cudnn.enabled = False
-
-#     cfg = Config()
-
-#     from Model.FINet import FINet
-#     model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
-
-#     train_dataset = TrainDataset(image_root=cfg.dp.train_imgs, gt_root=cfg.dp.train_masks,
-#                                  trainsize=cfg.trainsize, edge_root=None)
-#     train_datald = torch.utils.data.DataLoader(dataset=train_dataset,
-#                                                batch_size=cfg.batch_size,
-#                                                shuffle=True,
-#                                                num_workers=cfg.num_workers,
-#                                                pin_memory=True)
-
-#     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
-#     scheduler = CosineDecay(optimizer, max_lr=cfg.learning_rate, min_lr=cfg.min_lr, max_epoch=cfg.epochs)
-
-#     # ---- Resume from checkpoint if exists ----
-#     save_dir = "/kaggle/working/models"
-#     os.makedirs(save_dir, exist_ok=True)
-#     checkpoints = sorted(glob.glob(os.path.join(save_dir, "FINet_epoch*.pth")))
-
-#     start_epoch = 0
-#     if checkpoints:
-#         latest_ckpt = checkpoints[-1]  # last checkpoint
-#         print(f"Resuming training from checkpoint {latest_ckpt}...")
-#         ckpt = torch.load(latest_ckpt, map_location=cfg.device)
-#         model.load_state_dict(ckpt['model'])
-#         optimizer.load_state_dict(ckpt['optimizer'])
-#         scheduler.load_state_dict(ckpt['scheduler'])
-#         start_epoch = ckpt['epoch']
-#         print(f"Checkpoint loaded. Resuming from epoch {start_epoch}")
-#     else:
-#         print("No checkpoint found. Training from scratch.")
-
-#     train(start_epoch=start_epoch)
+    train(start_epoch=start_epoch, model_name=args.model)

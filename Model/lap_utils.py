@@ -127,3 +127,58 @@ class LaplacianInjectionBlock(nn.Module):
         fused_features = self.fusion_conv(concatenated)
         
         return fused_features
+    
+class LapDecoder(nn.Module):
+    """Lap decoder with Low, Middle, and Top branches"""
+    def __init__(self, in_channels, out_channels):
+        super(LapDecoder, self).__init__()
+        
+        self.low_branch = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1),
+            nn.InstanceNorm2d(in_channels),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.InstanceNorm2d(out_channels),
+            nn.LeakyReLU(0.2, inplace=True)
+        )
+        
+        self.middle_branch = nn.ModuleList([
+            self._make_residual_block(in_channels) for _ in range(7)
+        ])
+        
+        self.top_branch = nn.ModuleList([
+            self._make_residual_block(in_channels) for _ in range(2)
+        ])
+        
+        self.final_conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        
+    def _make_residual_block(self, channels):
+        """Creates a residual block"""
+        return nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        )
+    
+    def forward(self, x):
+        """
+        Forward pass through LAqua decoder
+        Returns: (low_out, middle_out, top_out)
+        """
+        low_out = self.low_branch(x)
+        
+        middle_x = x
+        for block in self.middle_branch:
+            residual = block(middle_x)
+            middle_x = middle_x + F.leaky_relu(residual, 0.2)
+        
+        top_x = middle_x
+        for block in self.top_branch:
+            residual = block(top_x)
+            top_x = top_x + F.leaky_relu(residual, 0.2)
+        
+        middle_out = self.final_conv(middle_x)
+        top_out = self.final_conv(top_x)
+        
+        return low_out, middle_out, top_out
+

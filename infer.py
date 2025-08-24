@@ -10,7 +10,7 @@ from Model.FINet import FINet
 from config import Config
 from utils.dataloader_freq import TestDataset
 from utils.metrics import EvaluationMetrics
-from Model.LAFinet import LaplacianFINet
+from Model.LAFinet import LaFINet
 
 def inference(datasets, save_dir="prediction_maps"):
     global model, cfg
@@ -81,7 +81,7 @@ if __name__ == '__main__':
     model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
 
     if args.model == 'LAFinet':
-        model = LaplacianFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+        model = LaFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
     
 
     # ---- Load checkpoint ----
@@ -89,7 +89,7 @@ if __name__ == '__main__':
         checkpoint = torch.load(args.ckpt, map_location=cfg.device, weights_only=False)
         print(f"Loaded checkpoint from {args.ckpt}")
     if args.model == 'LAFinet':
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model.load_state_dict(checkpoint['model'])
     else:
         model.load_state_dict( checkpoint['model'])
 
