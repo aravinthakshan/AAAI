@@ -8,6 +8,7 @@ from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock
 from Model.lap_utils import LapDecoder
 from Model.Replacements import FSM_FFM
 from Model.LDconv import LDConv
+
 class DeBlock(nn.Module):
     # Decoder Block with LAPDecoder integration
     def __init__(self, in_channels, out_channels):
@@ -162,8 +163,10 @@ class FFM(nn.Module):
 
 
 class LaFINet(nn.Module):    
-    def __init__(self, backbone='efficientb0', channels=(8, 12, 24, 48)):
+    def __init__(self, backbone='efficientb0', channels=(8, 12, 24, 48), use_conv='LDConv'):
         super(LaFINet, self).__init__()
+
+        self.use_conv = use_conv
 
         if backbone == 'efficientb0':
             self.encoder = EfficientNet_B0()
@@ -174,9 +177,8 @@ class LaFINet(nn.Module):
             return
 
         self.laplacian_pyramid = LaplacianPyramid(num_levels=5)
-        
         stage_channels = self.encoder.get_stage_channels()
-        
+
         self.lap_injection1 = LaplacianInjectionBlock(stage_channels[0], 3, stage_channels[0])
         self.lap_injection2 = LaplacianInjectionBlock(stage_channels[1], 3, stage_channels[1])
         self.lap_injection3 = LaplacianInjectionBlock(stage_channels[2], 3, stage_channels[2])
@@ -195,14 +197,21 @@ class LaFINet(nn.Module):
         
         self.gelu = nn.GELU()
         
+        # ---- DecoderBlocks ----
         self.deconv3 = DeBlock(channels[3], channels[2])
         self.deconv2 = DeBlock(channels[2], channels[1])
         self.deconv1 = DeBlock(channels[1], channels[0])
         
-        self.out_conv1 = nn.Conv2d(channels[0], 1, kernel_size=3, padding=1)
-        self.out_conv2 = nn.Conv2d(channels[1], 1, kernel_size=3, padding=1)
-        self.out_conv3 = nn.Conv2d(channels[2], 1, kernel_size=3, padding=1)
-        self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
+        if use_conv == 'LDConv':
+            from Model.LDconv import LDConv
+            ConvLayer = LDConv
+        else:
+            ConvLayer = nn.Conv2d
+
+        self.out_conv1 = ConvLayer(channels[0], 1, kernel_size=3, padding=1)
+        self.out_conv2 = ConvLayer(channels[1], 1, kernel_size=3, padding=1)
+        self.out_conv3 = ConvLayer(channels[2], 1, kernel_size=3, padding=1)
+        self.out_conv4 = ConvLayer(channels[3], 1, kernel_size=3, padding=1)
 
     def forward(self, x, high, low):
         laplacian_levels = self.laplacian_pyramid(x)

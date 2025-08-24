@@ -121,35 +121,50 @@ class LaplacianInjectionBlock(nn.Module):
     
 class LapDecoder(nn.Module):
     """Lap decoder with Low, Middle, and Top branches"""
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, use_conv='LDConv'):
         super(LapDecoder, self).__init__()
-        
+
+        self.use_conv = use_conv  
+
+        if use_conv == 'LDConv':
+            from Model.LDconv import LDConv
+            ConvLayer = LDConv
+        else:
+            ConvLayer = nn.Conv2d
+
         self.low_branch = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1),
+            ConvLayer(in_channels, in_channels, kernel_size=3, padding=1),
             nn.InstanceNorm2d(in_channels),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            ConvLayer(in_channels, out_channels, kernel_size=3, padding=1),
             nn.InstanceNorm2d(out_channels),
             nn.LeakyReLU(0.2, inplace=True)
         )
-        
+
         self.middle_branch = nn.ModuleList([
             self._make_residual_block(in_channels) for _ in range(7)
         ])
-        
+
         self.top_branch = nn.ModuleList([
             self._make_residual_block(in_channels) for _ in range(2)
         ])
-        
-        self.final_conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        
+
+        self.final_conv = ConvLayer(in_channels, out_channels, kernel_size=3, padding=1)
+
     def _make_residual_block(self, channels):
-        """Creates a residual block"""
+        """Creates a residual block with Conv or LDConv"""
+        if self.use_conv == 'LDConv':
+            from Model.LDconv import LDConv
+            ConvLayer = LDConv
+        else:
+            ConvLayer = nn.Conv2d
+
         return nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1),
+            ConvLayer(channels, channels, kernel_size=3, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+            ConvLayer(channels, channels, kernel_size=3, padding=1)
         )
+
     
     def forward(self, x):
         """
