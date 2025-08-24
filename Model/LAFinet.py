@@ -7,7 +7,7 @@ from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
 from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock
 from Model.lap_utils import LapDecoder
 from Model.Replacements import FSM_FFM
-
+from Model.LDconv import LDConv
 class DeBlock(nn.Module):
     # Decoder Block with LAPDecoder integration
     def __init__(self, in_channels, out_channels):

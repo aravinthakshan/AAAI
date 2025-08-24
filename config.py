@@ -11,7 +11,7 @@ class Config:
         self.CUDA = True
         self.device = torch.device('cuda' if self.CUDA else 'cpu')
 
-        self.epochs = 2 # changed this for training
+        self.epochs = 50 # changed this for training
         self.trainsize = 384
         self.batch_size = 32
         self.weight_decay = 4e-8
