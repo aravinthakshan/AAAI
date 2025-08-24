@@ -80,6 +80,8 @@ if __name__ == '__main__':
                         help='Learning rate scheduler')
     parser.add_argument('--save_dir', type=str, default="/kaggle/working/models",
                         help='Directory to save checkpoints')
+    parser.add_argument('--ckpt', type=str, default=None,
+                        help='Path to a specific checkpoint to resume from')
     args = parser.parse_args()
 
     # ---- Seeding ----
@@ -132,8 +134,9 @@ if __name__ == '__main__':
     checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "FINet_epoch*.pth")))
 
     start_epoch = 0
-    if checkpoints:
-        latest_ckpt = checkpoints[-1]
+    if checkpoints or args.ckpt:
+        # latest_ckpt = checkpoints[-1]
+        latest_ckpt = args.ckpt if args.ckpt else checkpoints[-1]  # last checkpoint or specified
         print(f"Resuming training from checkpoint {latest_ckpt}...")
         ckpt = torch.load(latest_ckpt, map_location=cfg.device)
         model.load_state_dict(ckpt['model'])
