@@ -6,12 +6,13 @@ from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
 from Model.Replacements import FSM_FFM
 from Model.ccnet import RCCAModule  
+from Model.conv_test import DilatedConv2d 
 # replace with DSC - Ghost - Convs
 class DeBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(DeBlock, self).__init__()
 
-        self.conv = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, bias=True)
+        self.conv = DilatedConv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, bias=True)
         self.conv1 = DepthwiseSeparableConv(in_channels=out_channels, out_channels=out_channels, kernel_size=3, padding=1,
                                               bias=True)
         self.conv2 = DepthwiseSeparableConv(in_channels=out_channels, out_channels=out_channels, kernel_size=(1, 3),
@@ -183,10 +184,10 @@ class FINet(nn.Module):
         self.deconv2 = DeBlock(channels[2], channels[1])
         self.deconv1 = DeBlock(channels[1], channels[0])
         # out conv
-        self.out_conv1 = nn.Conv2d(channels[0], 1, kernel_size=3, padding=1)
-        self.out_conv2 = nn.Conv2d(channels[1], 1, kernel_size=3, padding=1)
-        self.out_conv3 = nn.Conv2d(channels[2], 1, kernel_size=3, padding=1)
-        self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
+        self.out_conv1 = DilatedConv2d(channels[0], 1, kernel_size=3, padding=1)
+        self.out_conv2 = DilatedConv2d(channels[1], 1, kernel_size=3, padding=1)
+        self.out_conv3 = DilatedConv2d(channels[2], 1, kernel_size=3, padding=1)
+        self.out_conv4 = DilatedConv2d(channels[3], 1, kernel_size=3, padding=1)
 
     def forward(self, x, high, low):
         _, x1, x2, x3, x4 = self.encoder(x)
