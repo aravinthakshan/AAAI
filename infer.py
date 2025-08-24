@@ -77,9 +77,12 @@ if __name__ == '__main__':
 
     # ---- Load Config & Model ----
     cfg = Config()
+    
+    model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+
     if args.model == 'LAFinet':
         model = LaplacianFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
-    model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+    
 
     # ---- Load checkpoint ----
     if args.ckpt is not None:
