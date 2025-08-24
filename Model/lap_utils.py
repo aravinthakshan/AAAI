@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from Model.Conv_rep import LDConv
 
 class LaplacianPyramid(nn.Module):
     """
@@ -183,27 +182,3 @@ class LapDecoder(nn.Module):
         
         return low_out, middle_out, top_out
 
-
-def replace_conv_with_ldconv(module):
-    """
-    Recursively replace all nn.Conv2d layers with kernel_size=3 
-    by LDConv (keeping in/out channels, stride, bias).
-    """
-    for name, child in module.named_children():
-        # If it's a Conv2d with kernel size 3
-        if isinstance(child, nn.Conv2d) and child.kernel_size == (3, 3):
-            # Build LDConv with matching params
-            new_layer = LDConv(
-                inc=child.in_channels,
-                outc=child.out_channels,
-                num_param=3,   
-                stride=child.stride[0],
-                bias=(child.bias is not None)
-            )
-            setattr(module, name, new_layer)
-
-        else:
-            # Recurse down into children
-            replace_conv_with_ldconv(child)
-
-    return module
