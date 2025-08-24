@@ -242,3 +242,54 @@ class LaFINet(nn.Module):
         out4 = F.interpolate(out4, size=size, mode='bilinear', align_corners=False)
 
         return out1, out2, out3, out4
+    
+
+
+if __name__ == '__main__':
+    # Select device
+    from utils.tools import get_model_complexity
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # Initialize model and move to device
+    model = LaFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(device)
+    # model = FINet(backbone='tinynet-a', channels=(8,24,32,64)).to(device)
+
+    # Compute FLOPs and Params
+    flops, params = get_model_complexity(
+        model,
+        inputs=(
+            torch.randn(1, 3, 384, 384, device=device),
+            torch.randn(1, 96, 48, 48, device=device),
+            torch.randn(1, 96, 48, 48, device=device),
+        ),
+        round=3
+    )
+    print(f"Params: {params}, FLOPs: {flops}")
+
+    # Evaluation mode
+    model.eval()
+
+    # Input sizes
+    batch_size = 1
+    input_height, input_width = 384, 384
+    freq_height, freq_width = 48, 48
+
+    # Create sample inputs directly on device
+    x = torch.randn(batch_size, 3, input_height, input_width, device=device)
+    high = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
+    low = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
+
+    # Forward pass
+    with torch.no_grad():
+        out1, out2, out3, out4 = model(x, high, low)
+
+    # Print shapes
+    print(f"Input shape: {x.shape}")
+    print(f"High freq shape: {high.shape}")
+    print(f"Low freq shape: {low.shape}")
+    print(f"Output 1 shape: {out1.shape}")
+    print(f"Output 2 shape: {out2.shape}")
+    print(f"Output 3 shape: {out3.shape}")
+    print(f"Output 4 shape: {out4.shape}")
