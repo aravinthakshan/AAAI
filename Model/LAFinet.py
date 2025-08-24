@@ -115,54 +115,6 @@ class HFA(nn.Module): # This is the HFIM
         x = self.conv(x)
         return x
 
-
-class FFM(nn.Module):
-    """Enhanced Frequency Injection Module with Laplacian integration"""
-    def __init__(self, channel):
-        super(FFM, self).__init__()
-
-        # Original
-        self.high_reconv = ConvBNGeLU(in_channels=96, out_channels=channel, kernel_size=1)
-        self.low_reconv = ConvBNGeLU(in_channels=96, out_channels=channel, kernel_size=1)
-
-        self.high_reconv2 = ConvBN(in_channels=channel * 2, out_channels=channel, kernel_size=1)
-        self.low_reconv2 = ConvBN(in_channels=channel * 2, out_channels=channel, kernel_size=1)
-
-        self.high_msca = HFA(channels=channel)
-        self.low_msca = LFA(channels=channel)
-
-        # Fusion with more channels for Laplacian features ( Might need to change this later )
-        self.enhanced_fusion = nn.Sequential(
-            nn.Conv2d(channel * 2, channel, kernel_size=3, padding=1),
-            nn.BatchNorm2d(channel),
-            nn.GELU(),
-            nn.Conv2d(channel, channel, kernel_size=1)
-        )
-
-        self.gelu = nn.GELU()
-        self.conv = ConvBN(in_channels=channel, out_channels=channel, kernel_size=1)
-
-    def forward(self, x, high, low):
-        high = F.interpolate(high, size=x.shape[2:], mode='bilinear', align_corners=False)
-        low = F.interpolate(low, size=x.shape[2:], mode='bilinear', align_corners=False)
-        high = self.high_reconv(high)
-        low = self.low_reconv(low)
-
-        high_x = self.high_reconv2(torch.cat((high, x), dim=1))
-        low_x = self.low_reconv2(torch.cat((low, x), dim=1))
-
-        high_x = self.high_msca(high_x)
-        low_x = self.low_msca(low_x)
-
-        # Enhanced fusion
-        combined = torch.cat([high_x, low_x], dim=1)
-        x = self.enhanced_fusion(combined)
-        x = self.gelu(x)
-        x = self.conv(x)
-
-        return x
-
-
 class LaFINet(nn.Module):    
     def __init__(self, backbone='efficientb0', channels=(8, 12, 24, 48), use_conv='None'):
         super(LaFINet, self).__init__()
@@ -177,14 +129,12 @@ class LaFINet(nn.Module):
             print('backbone error')
             return
 
-        self.laplacian_pyramid = LaplacianPyramid(num_levels=5)
+        self.laplacian_pyramid = LaplacianPyramid(num_levels=3)
         stage_channels = self.encoder.get_stage_channels()
 
-        self.lap_injection1 = LaplacianInjectionBlock(stage_channels[0], 3, stage_channels[0])
         self.lap_injection2 = LaplacianInjectionBlock(stage_channels[1], 3, stage_channels[1])
         self.lap_injection3 = LaplacianInjectionBlock(stage_channels[2], 3, stage_channels[2])
         self.lap_injection4 = LaplacianInjectionBlock(stage_channels[3], 3, stage_channels[3])
-        self.lap_injection5 = LaplacianInjectionBlock(stage_channels[4], 3, stage_channels[4])
         
         self.re_conv1 = ConvBNGeLU(in_channels=stage_channels[1], out_channels=channels[0], kernel_size=1)
         self.re_conv2 = ConvBNGeLU(in_channels=stage_channels[2], out_channels=channels[1], kernel_size=1)
@@ -225,7 +175,6 @@ class LaFINet(nn.Module):
         x1 = self.lap_injection2(x1, laplacian_levels[1])  # L1 -> stage 1
         x2 = self.lap_injection3(x2, laplacian_levels[2])  # L2 -> stage 2
         x3 = self.lap_injection4(x3, laplacian_levels[3])  # L3 -> stage 3
-        x4 = self.lap_injection5(x4, laplacian_levels[4])  # L4 -> stage 4
         
         x1 = self.re_conv1(x1)
         x2 = self.re_conv2(x2)
