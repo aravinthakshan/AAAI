@@ -11,7 +11,7 @@ import glob
 import argparse
 from utils.loss import structure_loss, create_mask_pyramid, lap_structure_loss
 
-def train(start_epoch=0, model_name = "LAFInet"):
+def train(start_epoch=0, model_name = "LAFinet"):
     global model, train_datald, optimizer, cfg, scheduler
     for epoch in range(start_epoch, cfg.epochs):
         model.train()

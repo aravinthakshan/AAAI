@@ -5,13 +5,11 @@ import torch.nn.functional as F
 class LaplacianPyramid(nn.Module):
     """
     Laplacian Pyramid decomposition module
-    Creates multiple frequency bands at different scales
     """
     def __init__(self, num_levels=5):
         super(LaplacianPyramid, self).__init__()
         self.num_levels = num_levels
         
-        # Gaussian kernel for smoothing (5x5 kernel)
         self.register_buffer('gaussian_kernel', self._get_gaussian_kernel())
         
     def _get_gaussian_kernel(self):
@@ -29,24 +27,19 @@ class LaplacianPyramid(nn.Module):
         return kernel
     
     def _gaussian_blur(self, x):
-        """Apply Gaussian blur to input image"""
         # Apply convolution with Gaussian kernel for each channel separately
         return F.conv2d(x, self.gaussian_kernel, padding=2, groups=3)
     
     def _downsample(self, x):
-        """Downsample by factor of 2"""
         return F.interpolate(x, scale_factor=0.5, mode='bilinear', align_corners=False)
     
     def _upsample(self, x, target_size):
-        """Upsample to target size"""
         return F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
     
     def forward(self, x):
-        """
-        Create Laplacian pyramid from input image
-        Returns: List of Laplacian levels [L0, L1, L2, L3, L4]
-        L0 is the finest level, L4 is the coarsest
-        """
+        #Returns: List of Laplacian levels [L0, L1, L2, L3, L4]
+        #L0 is the finest level, L4 is the coarsest
+        
         pyramid_levels = []
         gaussian_pyramid = []
         
@@ -119,10 +112,8 @@ class LaplacianInjectionBlock(nn.Module):
                 align_corners=False
             )
         
-        # Process Laplacian level
         processed_laplacian = self.laplacian_conv(laplacian_level)
         
-        # Concatenate and fuse
         concatenated = torch.cat([encoder_features, processed_laplacian], dim=1)
         fused_features = self.fusion_conv(concatenated)
         
@@ -181,4 +172,3 @@ class LapDecoder(nn.Module):
         top_out = self.final_conv(top_x)
         
         return low_out, middle_out, top_out
-
