@@ -199,7 +199,7 @@ class FINet(nn.Module):
         x1 = self.ffm1(x=x1, high=high, low=low)
         x2 = self.ffm2(x=x2, high=high, low=low)
         x3 = self.ffm3(x=x3, high=high, low=low)
-        out4 = self.ffm4(x=x4, high=high, low=low)
+        out4 = self.ffm4(x=x4, high=high, low=low) # why is this not passed to conv block ?
 
         # RCCA Block 
         out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
