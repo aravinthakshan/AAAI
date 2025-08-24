@@ -72,6 +72,7 @@ if __name__ == '__main__':
                         help="Directory where checkpoints are stored.")
     parser.add_argument('--pred_dir', type=str, default="prediction_maps",
                         help="Directory to save prediction maps.")
+    parser.add_argument('--model', type=str, default='FINet',)
     args = parser.parse_args()
 
     # ---- Load Config & Model ----
