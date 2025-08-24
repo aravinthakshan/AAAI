@@ -13,6 +13,7 @@ from utils.loss import structure_loss, create_mask_pyramid, lap_structure_loss
 
 def train(start_epoch=0, model_name = "LAFinet"):
     global model, train_datald, optimizer, cfg, scheduler
+    print(f"Starting training {model_name}...")
     for epoch in range(start_epoch, cfg.epochs):
         model.train()
 
@@ -88,7 +89,7 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt', type=str, default=None,
                         help='Path to a specific checkpoint to resume from')
     parser.add_argument('--model', type=str, default='FInet',)
-    parser.add_argument('--trial', action='store_true', default= True)
+    parser.add_argument('--trial', action='store_true', default= False)
     args = parser.parse_args()
 
     # ---- Seeding ----
