@@ -121,7 +121,7 @@ class LaplacianInjectionBlock(nn.Module):
     
 class LapDecoder(nn.Module):
     """Lap decoder with Low, Middle, and Top branches"""
-    def __init__(self, in_channels, out_channels, use_conv='LDConv'):
+    def __init__(self, in_channels, out_channels, use_conv='None'):
         super(LapDecoder, self).__init__()
 
         self.use_conv = use_conv  

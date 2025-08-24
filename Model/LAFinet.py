@@ -164,7 +164,7 @@ class FFM(nn.Module):
 
 
 class LaFINet(nn.Module):    
-    def __init__(self, backbone='efficientb0', channels=(8, 12, 24, 48), use_conv='LDConv'):
+    def __init__(self, backbone='efficientb0', channels=(8, 12, 24, 48), use_conv='None'):
         super(LaFINet, self).__init__()
 
         self.use_conv = use_conv
