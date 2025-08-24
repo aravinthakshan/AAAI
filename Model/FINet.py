@@ -6,7 +6,7 @@ from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
 from Model.Replacements import FSM_FFM
 from Model.ccnet import RCCAModule  
-# replace with DSC - Ghost - Convs
+
 class DeBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(DeBlock, self).__init__()
@@ -285,5 +285,7 @@ if __name__ == '__main__':
 
 # # Original                 3.74  M 
 # # Modified                 3.989 M
-# # Cross Attention          4.047 M
+# # Cross Attention          4.047 M 
 # # Cross Attention for 3+4  4.062 M
+
+# 0.058 M 
