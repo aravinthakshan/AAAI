@@ -9,6 +9,7 @@ from tqdm import tqdm
 import os
 import glob
 import argparse
+import wandb
 
 def structure_loss(logits, mask):
     """
@@ -49,8 +50,18 @@ def train(start_epoch=0):
             optimizer.step()
             loss_iter.append(loss.item())
 
+        avg_loss = np.mean(loss_iter)
+        current_lr = scheduler.get_lr()[0]
+
         print(f'Epoch: {epoch + 1}, LR: {np.round(scheduler.get_lr(), 8)}, Loss: {np.round(np.mean(loss_iter), 8)}')
+        #Wandb 
+        wandb.log({
+            "epoch": epoch + 1,
+            "train_loss": avg_loss,
+            "learning_rate": current_lr
+        })
         scheduler.step()
+
 
         # Save checkpoints
         save_dir = "/kaggle/working/models"
@@ -93,6 +104,33 @@ if __name__ == '__main__':
     torch.backends.cudnn.enabled = False
 
     cfg = Config()
+
+    #WANDB
+    
+    try:
+        from kaggle_secrets import UserSecretsClient
+        user_secrets = UserSecretsClient()
+        wandb_api_key = user_secrets.get_secret("WANDB_API_KEY")
+        wandb.login(key=wandb_api_key)
+        print("Logged into wandb successfully.")
+    except ImportError:
+        print("Kaggle secrets not found. Please ensure you're in a Kaggle environment or log in manually.")
+    except Exception as e:
+        print(f"Could not log in to wandb: {e}")
+
+    wandb.init(
+        project="FINET testing",
+        entity="MRM_AAAI-student-26", 
+        config={
+            "learning_rate": cfg.learning_rate,
+            "architecture": "FINet",
+            "backbone": args.backbone,
+            "optimizer": args.optimizer,
+            "epochs": cfg.epochs,
+            "batch_size": cfg.batch_size,
+        }
+    )
+
 
     # ---- Model ----
     from Model.FINet import FINet
@@ -145,6 +183,8 @@ if __name__ == '__main__':
         print("No checkpoint found. Training from scratch.")
 
     train(start_epoch=start_epoch)
+
+    wandb.finish()
 
 # if __name__ == '__main__':
 #     seed = 123456
