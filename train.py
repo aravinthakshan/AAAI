@@ -50,8 +50,8 @@ def train(start_epoch=0):
             optimizer.step()
             loss_iter.append(loss.item())
 
-        avg_loss = np.mean(loss_iter)
-        current_lr = scheduler.get_lr()[0]
+        avg_loss = np.round(np.mean(loss_iter), 8)
+        current_lr = np.round(scheduler.get_lr(), 8)
 
         print(f'Epoch: {epoch + 1}, LR: {np.round(scheduler.get_lr(), 8)}, Loss: {np.round(np.mean(loss_iter), 8)}')
         #Wandb 
@@ -106,7 +106,7 @@ if __name__ == '__main__':
     cfg = Config()
 
     #WANDB
-    
+
     try:
         from kaggle_secrets import UserSecretsClient
         user_secrets = UserSecretsClient()
