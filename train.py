@@ -10,6 +10,7 @@ import os
 import glob
 import argparse
 from utils.loss import structure_loss, create_mask_pyramid, lap_structure_loss
+import wandb
 
 def train(start_epoch=0, model_name = "LAFinet"):
     global model, train_datald, optimizer, cfg, scheduler
@@ -55,6 +56,15 @@ def train(start_epoch=0, model_name = "LAFinet"):
             loss_iter.append(loss.item())
 
         print(f'Epoch: {epoch + 1}, LR: {np.round(scheduler.get_lr(), 8)}, Loss: {np.round(np.mean(loss_iter), 8)}')
+
+        #Wandb 
+        avg_loss =  np.round(np.mean(loss_iter), 8)
+        current_lr = np.round(scheduler.get_lr(), 8)
+        wandb.log({
+            "epoch": epoch + 1,
+            "train_loss": avg_loss,
+            "learning_rate": current_lr
+        })
         scheduler.step()
 
         # Save checkpoints
@@ -104,13 +114,41 @@ if __name__ == '__main__':
 
     cfg = Config()
 
+    #WANDB
+
+    try:
+        from kaggle_secrets import UserSecretsClient
+        user_secrets = UserSecretsClient()
+        wandb_api_key = user_secrets.get_secret("WANDB_API_KEY")
+        wandb.login(key=wandb_api_key)
+        print("Logged into wandb successfully.")
+    except ImportError:
+        print("Kaggle secrets not found. Please ensure you're in a Kaggle environment or log in manually.")
+    except Exception as e:
+        print(f"Could not log in to wandb: {e}")
+
+    wandb.init(
+        project="FINET testing",
+        entity="MRM_AAAI-student-26", 
+        config={
+            "learning_rate": cfg.learning_rate,
+            "architecture": args.model,
+            "backbone": args.backbone,
+            "optimizer": args.optimizer,
+            "epochs": cfg.epochs,
+            "batch_size": cfg.batch_size,
+        }
+    )
+
+
+
     # ---- Model ----
     from Model.FINet import FINet
-    from Model.LAFinet import LaFINet
+    from Model.LAFinet import LaplacianFINet
     if args.model == "FINet":
         model = FINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
     else:
-        model = LaFINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
+        model = LaplacianFINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
 
     # ---- Data ----
     train_dataset = TrainDataset(image_root=cfg.dp.train_imgs,
@@ -160,3 +198,4 @@ if __name__ == '__main__':
         print("No checkpoint found. Training from scratch.")
 
     train(start_epoch=start_epoch, model_name=args.model)
+    wandb.finish()
