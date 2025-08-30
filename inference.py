@@ -9,33 +9,67 @@ from config import Config
 from utils.dataloader_freq import TestDataset
 import argparse
 import wandb
+import glob
+
+# ✅ Define how many images you want to log to W&B per dataset
+NUM_IMAGES_TO_LOG = 5
 
 def inference(datasets):
-	global model, cfg
-	model.eval()
-	for dataset in datasets:
-		assert dataset in ['CHAMELEON', 'CAMO', 'COD10K', 'NC4K']
-		save_path = os.path.join('prediction_maps', dataset)
-		os.makedirs(save_path, exist_ok=True)
+    global model, cfg
+    model.eval()
 
-		test_dataset = TestDataset(image_root=getattr(cfg.dp, f'test_{dataset}_imgs'),
-		                           gt_root=getattr(cfg.dp, f'test_{dataset}_masks'),
-		                           testsize=cfg.trainsize)
+    for dataset in datasets:
+        assert dataset in ['CHAMELEON', 'CAMO', 'COD10K', 'NC4K']
+        save_path = os.path.join('prediction_maps', dataset)
+        os.makedirs(save_path, exist_ok=True)
 
-		# image, gt, gt_origin, name, high, low
-		for img, _, gt, name, high, low in tqdm(test_dataset):
-			img = img.unsqueeze(0).cuda()
-			high = high.unsqueeze(0).cuda()
-			low = low.unsqueeze(0).cuda()
-			out1 = model(img, high, low)[0]
-			out1 = F.interpolate(out1, size=gt.shape[1:], mode='bilinear', align_corners=True)
-			out1 = torch.sigmoid(out1) * 255
-			out1 = out1.squeeze(0).squeeze(0).detach().cpu().numpy().astype(np.uint8)
-			# save preds
-			cv2.imwrite(os.path.join(save_path, name), out1)
+        test_dataset = TestDataset(image_root=getattr(cfg.dp, f'test_{dataset}_imgs'),
+                                   gt_root=getattr(cfg.dp, f'test_{dataset}_masks'),
+                                   testsize=cfg.trainsize)
 
+        # ✅ 1. Initialize a W&B Table for this dataset's results
+        inference_table = wandb.Table(columns=["Image Name", "Image", "Ground Truth", "Prediction"])
+        log_count = 0
 
-import glob
+        # image, gt, gt_origin, name, high, low
+        for img_tensor, _, gt_tensor, name, high, low in tqdm(test_dataset, desc=f"Inferring on {dataset}"):
+            img_cuda = img_tensor.unsqueeze(0).cuda()
+            high = high.unsqueeze(0).cuda()
+            low = low.unsqueeze(0).cuda()
+            
+            out1_tensor = model(img_cuda, high, low)[0]
+            out1_tensor = F.interpolate(out1_tensor, size=gt_tensor.shape[1:], mode='bilinear', align_corners=True)
+            out1_tensor = torch.sigmoid(out1_tensor) * 255
+            
+            pred_np = out1_tensor.squeeze(0).squeeze(0).detach().cpu().numpy().astype(np.uint8)
+            
+            # save preds (original functionality)
+            cv2.imwrite(os.path.join(save_path, name), pred_np)
+
+            # ✅ 2. Log a limited number of images to the W&B Table
+            if log_count < NUM_IMAGES_TO_LOG:
+                # Un-normalize and prepare the original image for viewing
+                img_np = img_tensor.cpu().numpy().transpose(1, 2, 0)
+                mean = np.array([0.485, 0.456, 0.406])
+                std = np.array([0.229, 0.224, 0.225])
+                img_np = (img_np * std + mean) * 255
+                img_np = img_np.astype(np.uint8)
+
+                # Prepare the ground truth mask
+                gt_np = gt_tensor.squeeze().cpu().numpy().astype(np.uint8) * 255
+
+                # Add the data to our table
+                inference_table.add_data(
+                    name,
+                    wandb.Image(img_np),
+                    wandb.Image(gt_np),
+                    wandb.Image(pred_np)
+                )
+                log_count += 1
+        
+        # ✅ 3. Log the entire table for the dataset to W&B
+        wandb.log({f"Inference Results/{dataset}": inference_table})
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="FINet Inference Script")
@@ -49,11 +83,11 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='FINet',)
     args = parser.parse_args()
 
-    #WandB logging
+    run = None
     try:
         with open("wandb_run_id.txt", "r") as f:
             run_id = f.read().strip()
-        wandb.init(
+        run = wandb.init(
             project="FINET testing",
             entity="MRM_AAAI-student-26",
             id=run_id,
@@ -70,18 +104,20 @@ if __name__ == '__main__':
         from Model.LAFinet import LaplacianFINet
         print("Using LaFINet model for inference.")
         model = LaplacianFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+
     # ---- Load checkpoint ----
     if args.ckpt is not None:
         checkpoint = torch.load(args.ckpt, map_location=cfg.device)
         print(f"Loaded checkpoint from {args.ckpt}")
     else:
         checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "FINet_epoch*.pth")))
+
         if checkpoints:
             latest_ckpt = checkpoints[-1]
             checkpoint = torch.load(latest_ckpt, map_location=cfg.device)
             print(f"Loaded latest checkpoint: {latest_ckpt}")
         else:
-            raise FileNotFoundError("No checkpoints found in models folder.")
+            raise FileNotFoundError(f"No {args.model} checkpoints found in {args.save_dir}.")
 
     model.load_state_dict(checkpoint['model'])
 
