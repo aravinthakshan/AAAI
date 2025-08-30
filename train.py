@@ -139,6 +139,10 @@ if __name__ == '__main__':
             "batch_size": cfg.batch_size,
         }
     )
+    #saving wandb name for use inn inference and evaluate
+    print(f"Started W&B run with ID: {wandb.run.id}")
+    with open("wandb_run_id.txt", "w") as f:
+        f.write(wandb.run.id)
 
 
 
@@ -149,7 +153,7 @@ if __name__ == '__main__':
         model = FINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
     else:
         model = LaplacianFINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
-        
+
     print(f"Total parameters for model '{args.model}': {sum(p.numel() for p in model.parameters()):,}")
 
     # ---- Data ----
@@ -201,4 +205,4 @@ if __name__ == '__main__':
         print("No checkpoint found. Training from scratch.")
 
     train(start_epoch=start_epoch, model_name=args.model)
-    wandb.finish()
+    

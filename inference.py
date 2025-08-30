@@ -8,6 +8,7 @@ from Model.FINet import FINet
 from config import Config
 from utils.dataloader_freq import TestDataset
 import argparse
+import wandb
 
 def inference(datasets):
 	global model, cfg
@@ -48,13 +49,27 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='FINet',)
     args = parser.parse_args()
 
+    #WandB logging
+    try:
+        with open("wandb_run_id.txt", "r") as f:
+            run_id = f.read().strip()
+        wandb.init(
+            project="FINET testing",
+            entity="MRM_AAAI-student-26",
+            id=run_id,
+            resume="must"
+        )
+        print(f"Resumed W&B run {run_id} for inference.")
+    except Exception as e:
+        print(f"Could not resume W&B run for inference. Error: {e}")
+
     cfg = Config()
 
     model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
     if args.model == "LaFINet":
-        from Model.LAFinet import LaFINet
+        from Model.LAFinet import LaplacianFINet
         print("Using LaFINet model for inference.")
-        model = LaFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+        model = LaplacianFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
     # ---- Load checkpoint ----
     if args.ckpt is not None:
         checkpoint = torch.load(args.ckpt, map_location=cfg.device)

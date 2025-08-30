@@ -3,7 +3,7 @@ import cv2
 from tqdm import tqdm
 from config import Config
 from utils.metrics import EvaluationMetrics
-
+import wandb
 
 def evaluate(pred_path, dataset):
 	global cfg
@@ -25,6 +25,18 @@ def evaluate(pred_path, dataset):
 
 
 if __name__ == '__main__':
+	try:
+		with open("wandb_run_id.txt", "r") as f:
+			run_id = f.read().strip()
+			wandb.init(
+            project="FINET testing",
+            entity="MRM_AAAI-student-26",
+            id=run_id,
+            resume="must"
+        )
+			print(f"Resumed W&B run {run_id} for evaluation.")
+	except Exception as e:
+		print(f"Could not resume W&B run for evaluation. Error: {e}")
 	pred_path = 'prediction_maps'
 
 	cfg = Config()
@@ -32,6 +44,9 @@ if __name__ == '__main__':
 	datasets = ['CHAMELEON', 'CAMO', 'COD10K', 'NC4K']
 	for dataset in datasets:
 		metric_dic = evaluate(pred_path, dataset)
+
+		wandb_metrics = {f"eval/{dataset}/{key}": value for key, value in metric_dic.items()}
+		wandb.log(wandb_metrics)
 
 		sm = metric_dic['sm']
 		emMean = metric_dic['emMean']
@@ -45,3 +60,7 @@ if __name__ == '__main__':
 		print('emAdp:', emAdp)
 		print('wfm:', wfm)
 		print('mae:', mae)
+
+	if wandb.run:
+		wandb.finish()
+		print("\nEvaluation finished and W&B run closed.")
