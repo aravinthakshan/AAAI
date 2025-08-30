@@ -81,6 +81,17 @@ def train(start_epoch=0, model_name = "LAFinet"):
             }, save_path)
             print(f"Checkpoint saved at {save_path}")
 
+        #Saving weights to WandB
+        if epoch == cfg.epochs - 1:
+              artifact = wandb.Artifact(
+                  name=f'{model_name}{cfg.epochs}e-final',  # Simplified name for the final model
+                  type='model',
+                  metadata={'epoch': epoch + 1, 'loss': np.mean(loss_iter)}
+              )
+              artifact.add_file(local_path=save_path)
+              wandb.run.log_artifact(artifact)
+              print(f"✅ Saved final model artifact to W&B")
+
 
 
 if __name__ == '__main__':
