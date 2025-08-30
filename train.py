@@ -84,7 +84,7 @@ def train(start_epoch=0, model_name = "LAFinet"):
         #Saving weights to WandB
         if epoch == cfg.epochs - 1:
               artifact = wandb.Artifact(
-                  name=f'{model_name}{cfg.epochs}e-final',  # Simplified name for the final model
+                  name=f'{model_name}{cfg.epochs}-{wandb.run.name}e-final',  # Simplified name for the final model
                   type='model',
                   metadata={'epoch': epoch + 1, 'loss': np.mean(loss_iter)}
               )
