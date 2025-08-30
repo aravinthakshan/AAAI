@@ -149,6 +149,8 @@ if __name__ == '__main__':
         model = FINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
     else:
         model = LaplacianFINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
+        
+    print(f"Total parameters for model '{args.model}': {sum(p.numel() for p in model.parameters()):,}")
 
     # ---- Data ----
     train_dataset = TrainDataset(image_root=cfg.dp.train_imgs,
@@ -171,6 +173,7 @@ if __name__ == '__main__':
                                     lr=cfg.learning_rate,
                                     momentum=0.9,
                                     weight_decay=cfg.weight_decay)
+    #Experiment with SOAP later
 
     # ---- Scheduler ----
     if args.scheduler == 'cosine':
