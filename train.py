@@ -9,6 +9,7 @@ from tqdm import tqdm
 import os
 import glob
 import argparse
+from utils.soap import SOAP
 from utils.loss import structure_loss, create_mask_pyramid, lap_structure_loss
 import wandb
 
@@ -179,6 +180,7 @@ if __name__ == '__main__':
                                                pin_memory=True)
 
     # ---- Optimizer ----
+    """
     if args.optimizer == 'adam':
         optimizer = torch.optim.Adam(model.parameters(),
                                      lr=cfg.learning_rate,
@@ -187,8 +189,8 @@ if __name__ == '__main__':
         optimizer = torch.optim.SGD(model.parameters(),
                                     lr=cfg.learning_rate,
                                     momentum=0.9,
-                                    weight_decay=cfg.weight_decay)
-    #Experiment with SOAP later
+                                    weight_decay=cfg.weight_decay)"""
+    optimizer = SOAP(lr = 3e-3, betas=(.95, .95), weight_decay=.01, precondition_frequency=10)
 
     # ---- Scheduler ----
     if args.scheduler == 'cosine':
