@@ -4,70 +4,8 @@ import torch.nn.functional as F
 from Model.EfficientNet import EfficientNet_B0
 from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
-from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock, LDConv, asf_attention_model, ScalSeq
 from Model.Replacements import FSM_FFM
-
-class Decoder(nn.Module):
-    """Lap decoder with Low, Middle, and Top branches"""
-    def __init__(self, in_channels, out_channels):
-        super(Decoder, self).__init__()
-        
-        # Low Branch - generates primary segmentation mask
-        self.low_branch = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1),
-            nn.InstanceNorm2d(in_channels),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.InstanceNorm2d(out_channels),
-            nn.LeakyReLU(0.2, inplace=True)
-        )
-        
-        # Middle Branch - reconstructs high-resolution residuals
-        self.middle_branch = nn.ModuleList([
-            self._make_residual_block(in_channels) for _ in range(7)
-        ])
-        
-        # Top Branch - final refinement
-        self.top_branch = nn.ModuleList([
-            self._make_residual_block(in_channels) for _ in range(2)
-        ])
-        
-        # Final convolution for upsampling
-        self.final_conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        
-    def _make_residual_block(self, channels):
-        """Create a residual block with LeakyReLU between conv layers"""
-        return nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        )
-    
-    def forward(self, x):
-        """
-        Forward pass through LAqua decoder
-        Returns: (low_out, middle_out, top_out)
-        """
-        # Low Branch - primary segmentation
-        low_out = self.low_branch(x)
-        
-        # Middle Branch - residual reconstruction
-        middle_x = x
-        for block in self.middle_branch:
-            residual = block(middle_x)
-            middle_x = middle_x + F.leaky_relu(residual, 0.2)
-        
-        # Top Branch - final refinement
-        top_x = middle_x
-        for block in self.top_branch:
-            residual = block(top_x)
-            top_x = top_x + F.leaky_relu(residual, 0.2)
-        
-        # Final outputs
-        middle_out = self.final_conv(middle_x)
-        top_out = self.final_conv(top_x)
-        
-        return low_out, middle_out, top_out
+from Model.ccnet import RCCAModule  
 
 class DeBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -81,38 +19,42 @@ class DeBlock(nn.Module):
         self.conv3 = DepthwiseSeparableConv(in_channels=out_channels, out_channels=out_channels, kernel_size=(3, 1),
                                               padding=(1, 0), bias=True)
         self.bn = nn.BatchNorm2d(out_channels)
-        self.lap_decoder = Decoder(out_channels, out_channels)
 
     def forward(self, x):
         x = self.conv(x)
         x = self.conv1(x) + self.conv2(x) + self.conv3(x)
         x = self.bn(x)
-        # Apply LAP decoder
-        low_out, middle_out, top_out = self.lap_decoder(x)
-        # Combine all branches (hierarchical upsampling)
-        combined = low_out + middle_out + top_out
-        return combined
+        return x
 
-class LFA(nn.Module):
-    """Low Frequency Injection Module (unchanged from original)"""
+
+class LFA(nn.Module): # This is the LFIM
+    """
+    Low Frequency Injection Module
+    """
     def __init__(self, channels):
         super(LFA, self).__init__()
 
         # local_att
         self.local_att = nn.Sequential(
+            # keep spatial dimension
+            # squeeze
             nn.Conv2d(channels, channels // 2, kernel_size=1, stride=1, padding=0, bias=False),
             nn.BatchNorm2d(channels // 2),
             nn.GELU(),
+            # excitation
             nn.Conv2d(channels // 2, channels, kernel_size=1, stride=1, padding=0, bias=False),
             nn.BatchNorm2d(channels)
         )
 
         # global_att
         self.global_att = nn.Sequential(
+            # squeeze spatial dimension
             nn.AdaptiveAvgPool2d(1),
+            # squeeze channel
             nn.Conv2d(channels, channels // 2, kernel_size=1, stride=1, padding=0, bias=False),
             nn.BatchNorm2d(channels // 2),
             nn.GELU(),
+            # excite channel
             nn.Conv2d(channels // 2, channels, kernel_size=1, stride=1, padding=0, bias=False),
             nn.Sigmoid()
         )
@@ -125,16 +67,21 @@ class LFA(nn.Module):
         return x
 
 
-class HFA(nn.Module):
-    """High Frequency Injection Module (unchanged from original)"""
+class HFA(nn.Module): # This is the HFIM 
+    """
+    High Frequency Injection Module
+    """
     def __init__(self, channels):
         super(HFA, self).__init__()
 
         # local_att
         self.local_att = nn.Sequential(
+            # keep channel dimension
+            # squeeze
             DepthwiseSeparableConv(channels, channels, kernel_size=3, padding=1, bias=False, stride=2),
             nn.BatchNorm2d(channels),
             nn.GELU(),
+            # excitation
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
             DepthwiseSeparableConv(channels, channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(channels)
@@ -142,9 +89,12 @@ class HFA(nn.Module):
 
         # global_att
         self.global_att = nn.Sequential(
+            # squeeze channel dimension in forward function
+            # squeeze spatial
             nn.Conv2d(in_channels=1, out_channels=1, kernel_size=3, stride=2, padding=1, bias=False),
             nn.BatchNorm2d(1),
             nn.GELU(),
+            # excitation spatial
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
             DepthwiseSeparableConv(1, 1, kernel_size=3, padding=1, bias=False),
             nn.Sigmoid()
@@ -158,12 +108,14 @@ class HFA(nn.Module):
         return x
 
 
-class FFM(nn.Module):
-    """Enhanced Frequency Injection Module with Laplacian integration"""
+class FFM(nn.Module): # This is the FIM, it takes input from the encoder and high/low frequency features
+    """
+    Frequency Injection Module
+    """
+
     def __init__(self, channel):
         super(FFM, self).__init__()
 
-        # Original high/low frequency processing
         self.high_reconv = ConvBNGeLU(in_channels=96, out_channels=channel, kernel_size=1)
         self.low_reconv = ConvBNGeLU(in_channels=96, out_channels=channel, kernel_size=1)
 
@@ -172,14 +124,6 @@ class FFM(nn.Module):
 
         self.high_msca = HFA(channels=channel)
         self.low_msca = LFA(channels=channel)
-
-        # Enhanced fusion with more channels for Laplacian features
-        self.enhanced_fusion = nn.Sequential(
-            nn.Conv2d(channel * 2, channel, num_param=3, stride=1, bias=True),
-            nn.BatchNorm2d(channel),
-            nn.GELU(),
-            nn.Conv2d(channel, channel, kernel_size=1)
-        )
 
         self.gelu = nn.GELU()
         self.conv = ConvBN(in_channels=channel, out_channels=channel, kernel_size=1)
@@ -196,118 +140,78 @@ class FFM(nn.Module):
         high_x = self.high_msca(high_x)
         low_x = self.low_msca(low_x)
 
-        # Enhanced fusion
-        combined = torch.cat([high_x, low_x], dim=1)
-        x = self.enhanced_fusion(combined)
-        x = self.gelu(x)
+        x = self.gelu(high_x + low_x)
         x = self.conv(x)
 
         return x
 
 
-class LaplacianFINet(nn.Module):
-    """FINet with 3-layer Laplacian Pyramid Integration and No Decoder"""
-    
-    def __init__(self, backbone='efficientb0', channels=(8, 12, 24, 48)):
-        super(LaplacianFINet, self).__init__()
+class FINet(nn.Module):
+
+    def __init__(self, backbone='efficientb0', channels=(8,12,24,48)):
+        super(FINet, self).__init__()
 
         if backbone == 'efficientb0':
-            self.encoder = EfficientNet_B0()
+            self.encoder = EfficientNet_B0() # this is just being used as an encoder 
         elif backbone == 'tinynet-a':
             self.encoder = TinyNetA()
         else:
             print('backbone error')
             return
 
-        # Laplacian Pyramid decomposition with only 3 levels
-        self.laplacian_pyramid = LaplacianPyramid(num_levels=3)
-        
-        stage_channels = self.encoder.get_stage_channels()
-        
-        # Laplacian injection blocks for first 3 encoder stages only
-        self.lap_injection1 = LaplacianInjectionBlock(stage_channels[1], 3, stage_channels[1])
-        self.lap_injection2 = LaplacianInjectionBlock(stage_channels[2], 3, stage_channels[2])
-        self.lap_injection3 = LaplacianInjectionBlock(stage_channels[3], 3, stage_channels[3])
-        
-        # Channel reduction - only for stages that will be processed
-        self.re_conv1 = ConvBNGeLU(in_channels=stage_channels[1], out_channels=channels[0], kernel_size=1)
+        stage_channels = self.encoder.get_stage_channels() # returns [16, 24, 40, 112, 320]
+        # reduction
+        self.re_conv1 = ConvBNGeLU(in_channels=stage_channels[1], out_channels=channels[0], kernel_size=1) 
         self.re_conv2 = ConvBNGeLU(in_channels=stage_channels[2], out_channels=channels[1], kernel_size=1)
         self.re_conv3 = ConvBNGeLU(in_channels=stage_channels[3], out_channels=channels[2], kernel_size=1)
         self.re_conv4 = ConvBNGeLU(in_channels=stage_channels[4], out_channels=channels[3], kernel_size=1)
-        
-        # Enhanced frequency fusion modules - only for 3 stages + final stage
+        # frequency fusion, initialized with necessary channels
+        # self.ffm1 = FFM(channels[0]) 
+        # self.ffm2 = FFM(channels[1])
+        # self.ffm3 = FFM(channels[2])
+        # self.ffm4 = FFM(channels[3])
         self.ffm1 = FSM_FFM(channels[0])
         self.ffm2 = FSM_FFM(channels[1])
         self.ffm3 = FSM_FFM(channels[2])
         self.ffm4 = FSM_FFM(channels[3])
-        
         # activation
         self.gelu = nn.GELU()
-        """
-        # Simple upsampling layers instead of decoder blocks
-        self.upsample3 = nn.Sequential(
-            nn.ConvTranspose2d(channels[3], channels[2], kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.BatchNorm2d(channels[2]),
-            nn.GELU()
-        )
-        
-        self.upsample2 = nn.Sequential(
-            nn.ConvTranspose2d(channels[2], channels[1], kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.BatchNorm2d(channels[1]),
-            nn.GELU()
-        )
-        
-        self.upsample1 = nn.Sequential(
-            nn.ConvTranspose2d(channels[1], channels[0], kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.BatchNorm2d(channels[0]),
-            nn.GELU()
-        )"""
-
-        self.deconv3 = DeBlock(channels[3], channels[2]) 
+        # RCCA Block
+        self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
+        self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
+        self.rcca_out2 = RCCAModule(channels[1])
+        self.rcca_out1 = RCCAModule(channels[0])
+        # decoder
+        self.deconv3 = DeBlock(channels[3], channels[2]) # decoder replaced with new deblock from the new attention mechanism
         self.deconv2 = DeBlock(channels[2], channels[1])
         self.deconv1 = DeBlock(channels[1], channels[0])
-        # Output convolutions - simplified
+        # out conv
         self.out_conv1 = nn.Conv2d(channels[0], 1, kernel_size=3, padding=1)
         self.out_conv2 = nn.Conv2d(channels[1], 1, kernel_size=3, padding=1)
         self.out_conv3 = nn.Conv2d(channels[2], 1, kernel_size=3, padding=1)
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
 
-        self.asf4 = asf_attention_model(channels[3])
-        self.asf3 = asf_attention_model(channels[2])
-        self.asf2 = asf_attention_model(channels[1])
-        self.asf1 = asf_attention_model(channels[0])
-        self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
-
     def forward(self, x, high, low):
-        # Generate 3-level Laplacian pyramid from input
-        laplacian_levels = self.laplacian_pyramid(x)
-        
-        # Forward through encoder
-        x0, x1, x2, x3, x4 = self.encoder(x)
-        
-        # Inject Laplacian levels at corresponding scales (only first 3 levels)
-        x1 = self.lap_injection1(x1, laplacian_levels[0])  # L0 -> stage 1
-        x2 = self.lap_injection2(x2, laplacian_levels[1])  # L1 -> stage 2
-        x3 = self.lap_injection3(x3, laplacian_levels[2])  # L2 -> stage 3
-        # x4 remains unchanged (no Laplacian injection)
-        
-        # Channel reduction
+        _, x1, x2, x3, x4 = self.encoder(x)
+        # channel reduction to 64
         x1 = self.re_conv1(x1)
         x2 = self.re_conv2(x2)
         x3 = self.re_conv3(x3)
         x4 = self.re_conv4(x4)
-        
-        # Enhanced frequency fusion
+        # frequency fusion comes from def freq_decompose(self, freq) in dataloader
         x1 = self.ffm1(x=x1, high=high, low=low)
         x2 = self.ffm2(x=x2, high=high, low=low)
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
 
-        fused = self.ssff([x1, x2, x3])
-        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+        x3 = self.rcca_out3(x3) # added rcca here
+        # RCCA Block, this could add lots of overhead remove later
+        out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
 
-        out4 = self.asf4([out4, fused])
+        # decoding
+        # out3 = self.gelu(
+        #     self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
 
         out3 = self.gelu(
             self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
@@ -316,13 +220,11 @@ class LaplacianFINet(nn.Module):
         out1 = self.gelu(
             self.deconv1(F.interpolate(out2, size=x1.shape[2:], mode='bilinear', align_corners=False)) + x1)
 
-        # Generate outputs at multiple scales
         out1 = self.out_conv1(out1)
         out2 = self.out_conv2(out2)
         out3 = self.out_conv3(out3)
         out4 = self.out_conv4(out4)
 
-        # Upsample all outputs to same resolution
         size = (out1.shape[2] * 4, out1.shape[3] * 4)
         out1 = F.interpolate(out1, size=size, mode='bilinear', align_corners=False)
         out2 = F.interpolate(out2, size=size, mode='bilinear', align_corners=False)
@@ -331,3 +233,61 @@ class LaplacianFINet(nn.Module):
 
         return out1, out2, out3, out4
 
+
+if __name__ == '__main__':
+    # Select device
+    from utils.tools import get_model_complexity
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # Initialize model and move to device
+    model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(device)
+    # model = FINet(backbone='tinynet-a', channels=(8,24,32,64)).to(device)
+
+    # Compute FLOPs and Params
+    flops, params = get_model_complexity(
+        model,
+        inputs=(
+            torch.randn(1, 3, 384, 384, device=device),
+            torch.randn(1, 96, 48, 48, device=device),
+            torch.randn(1, 96, 48, 48, device=device),
+        ),
+        round=3
+    )
+    print(f"Params: {params}, FLOPs: {flops}")
+
+    # Evaluation mode
+    model.eval()
+
+    # Input sizes
+    batch_size = 1
+    input_height, input_width = 384, 384
+    freq_height, freq_width = 48, 48
+
+    # Create sample inputs directly on device
+    x = torch.randn(batch_size, 3, input_height, input_width, device=device)
+    high = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
+    low = torch.randn(batch_size, 96, freq_height, freq_width, device=device)
+
+    # Forward pass
+    with torch.no_grad():
+        out1, out2, out3, out4 = model(x, high, low)
+
+    # Print shapes
+    print(f"Input shape: {x.shape}")
+    print(f"High freq shape: {high.shape}")
+    print(f"Low freq shape: {low.shape}")
+    print(f"Output 1 shape: {out1.shape}")
+    print(f"Output 2 shape: {out2.shape}")
+    print(f"Output 3 shape: {out3.shape}")
+    print(f"Output 4 shape: {out4.shape}")
+
+# # Original                 3.74  M 
+# # Modified                 3.989 M
+# # Cross Attention          4.047 M 
+# # Cross Attention for 3+4  4.062 M
+
+# 0.058 M 
+
+# FFM and Decoder changes attention
