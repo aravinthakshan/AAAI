@@ -172,15 +172,6 @@ class FFM(nn.Module):
 
         self.high_msca = HFA(channels=channel)
         self.low_msca = LFA(channels=channel)
-
-        # Enhanced fusion with more channels for Laplacian features
-        self.enhanced_fusion = nn.Sequential(
-            nn.Conv2d(channel * 2, channel, num_param=3, stride=1, bias=True),
-            nn.BatchNorm2d(channel),
-            nn.GELU(),
-            nn.Conv2d(channel, channel, kernel_size=1)
-        )
-
         self.gelu = nn.GELU()
         self.conv = ConvBN(in_channels=channel, out_channels=channel, kernel_size=1)
 
@@ -273,11 +264,11 @@ class LaplacianFINet(nn.Module):
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
 
-        self.asf4 = asf_attention_model(channels[3])
-        self.asf3 = asf_attention_model(channels[2])
-        self.asf2 = asf_attention_model(channels[1])
-        self.asf1 = asf_attention_model(channels[0])
-        self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
+        #self.asf4 = asf_attention_model(channels[3])
+        #self.asf3 = asf_attention_model(channels[2])
+        #self.asf2 = asf_attention_model(channels[1])
+        #self.asf1 = asf_attention_model(channels[0])
+        #self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
 
     def forward(self, x, high, low):
         # Generate 3-level Laplacian pyramid from input
@@ -304,10 +295,10 @@ class LaplacianFINet(nn.Module):
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
 
-        fused = self.ssff([x1, x2, x3])
-        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+        #fused = self.ssff([x1, x2, x3])
+        #fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
 
-        out4 = self.asf4([out4, fused])
+        #out4 = self.asf4([out4, fused])
 
         out3 = self.gelu(
             self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
