@@ -101,7 +101,7 @@ if __name__ == '__main__':
                         choices=['efficientb0', 'tinynet-a'],
                         help='Backbone network for FINet')
     parser.add_argument('--optimizer', type=str, default='adam',
-                        choices=['adam', 'sgd'],
+                        choices=['adam', 'sgd','soap'],
                         help='Optimizer type')
     parser.add_argument('--scheduler', type=str, default='cosine',
                         choices=['cosine', 'none'],
@@ -180,7 +180,6 @@ if __name__ == '__main__':
                                                pin_memory=True)
 
     # ---- Optimizer ----
-    """
     if args.optimizer == 'adam':
         optimizer = torch.optim.Adam(model.parameters(),
                                      lr=cfg.learning_rate,
@@ -189,8 +188,9 @@ if __name__ == '__main__':
         optimizer = torch.optim.SGD(model.parameters(),
                                     lr=cfg.learning_rate,
                                     momentum=0.9,
-                                    weight_decay=cfg.weight_decay)"""
-    optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01, precondition_frequency=10)
+                                    weight_decay=cfg.weight_decay)
+    elif args.optimizer == 'soap':
+        optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01, precondition_frequency=10)
 
     # ---- Scheduler ----
     if args.scheduler == 'cosine':
