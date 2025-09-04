@@ -157,8 +157,6 @@ if __name__ == '__main__':
     with open("wandb_run_id.txt", "w") as f:
         f.write(wandb.run.id)
 
-
-
     # ---- Model ----
     from Model.FINet import FINet
     from Model.LAFinet import LaplacianFINet
