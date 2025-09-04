@@ -157,13 +157,14 @@ class HFA(nn.Module):
         x = self.conv(x)
         return x
 
+class FFM(nn.Module): # This is the FIM, it takes input from the encoder and high/low frequency features
+    """
+    Frequency Injection Module
+    """
 
-class FFM(nn.Module):
-    """Enhanced Frequency Injection Module with Laplacian integration"""
     def __init__(self, channel):
         super(FFM, self).__init__()
 
-        # Original high/low frequency processing
         self.high_reconv = ConvBNGeLU(in_channels=96, out_channels=channel, kernel_size=1)
         self.low_reconv = ConvBNGeLU(in_channels=96, out_channels=channel, kernel_size=1)
 
@@ -172,6 +173,7 @@ class FFM(nn.Module):
 
         self.high_msca = HFA(channels=channel)
         self.low_msca = LFA(channels=channel)
+
         self.gelu = nn.GELU()
         self.conv = ConvBN(in_channels=channel, out_channels=channel, kernel_size=1)
 
@@ -187,10 +189,7 @@ class FFM(nn.Module):
         high_x = self.high_msca(high_x)
         low_x = self.low_msca(low_x)
 
-        # Enhanced fusion
-        combined = torch.cat([high_x, low_x], dim=1)
-        x = self.enhanced_fusion(combined)
-        x = self.gelu(x)
+        x = self.gelu(high_x + low_x)
         x = self.conv(x)
 
         return x
