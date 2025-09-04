@@ -190,7 +190,7 @@ if __name__ == '__main__':
                                     lr=cfg.learning_rate,
                                     momentum=0.9,
                                     weight_decay=cfg.weight_decay)"""
-    optimizer = SOAP(lr = 3e-3, betas=(.95, .95), weight_decay=.01, precondition_frequency=10)
+    optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01, precondition_frequency=10)
 
     # ---- Scheduler ----
     if args.scheduler == 'cosine':
