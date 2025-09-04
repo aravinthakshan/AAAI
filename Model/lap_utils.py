@@ -17,12 +17,14 @@ class LaplacianPyramid(nn.Module):
         self.register_buffer('gaussian_kernel', self._get_gaussian_kernel())
         
     def _get_gaussian_kernel(self):
-        """Create a 3x3 Gaussian kernel for 3-level pyramid"""
+        """Create a 5x5 Gaussian kernel"""
         kernel = torch.tensor([
-            [1, 2, 1],
-            [2, 4, 2],
-            [1, 2, 1]
-        ], dtype=torch.float32) / 16.0
+            [1, 4, 6, 4, 1],
+            [4, 16, 24, 16, 4],
+            [6, 24, 36, 24, 6],
+            [4, 16, 24, 16, 4],
+            [1, 4, 6, 4, 1]
+        ], dtype=torch.float32) / 256.0
         
         # Expand for 3 channels (RGB)
         kernel = kernel.unsqueeze(0).unsqueeze(0).repeat(3, 1, 1, 1)
