@@ -16,6 +16,7 @@ import wandb
 def train(start_epoch=0, model_name = "LAFinet"):
     global model, train_datald, optimizer, cfg, scheduler
     print(f"Starting training {model_name}...")
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     for epoch in range(start_epoch, cfg.epochs):
         model.train()
 
