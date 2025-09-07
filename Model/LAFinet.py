@@ -226,10 +226,10 @@ class LaplacianFINet(nn.Module):
         self.re_conv4 = ConvBNGeLU(in_channels=stage_channels[4], out_channels=channels[3], kernel_size=1)
         
         # Enhanced frequency fusion modules - only for 3 stages + final stage
-        self.ffm1 = FFM(channels[0])
-        self.ffm2 = FFM(channels[1])
-        self.ffm3 = FFM(channels[2])
-        self.ffm4 = FFM(channels[3])
+        self.ffm1 = FSM_FFM(channels[0])
+        self.ffm2 = FSM_FFM(channels[1])
+        self.ffm3 = FSM_FFM(channels[2])
+        self.ffm4 = FSM_FFM(channels[3])
         
         # activation
         self.gelu = nn.GELU()
@@ -263,11 +263,11 @@ class LaplacianFINet(nn.Module):
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
 
-        #self.asf4 = asf_attention_model(channels[3])
-        #self.asf3 = asf_attention_model(channels[2])
-        #self.asf2 = asf_attention_model(channels[1])
-        #self.asf1 = asf_attention_model(channels[0])
-        #self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
+        self.asf4 = asf_attention_model(channels[3])
+        self.asf3 = asf_attention_model(channels[2])
+        self.asf2 = asf_attention_model(channels[1])
+        self.asf1 = asf_attention_model(channels[0])
+        self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
 
     def forward(self, x, high, low):
         # Generate 3-level Laplacian pyramid from input
@@ -294,10 +294,10 @@ class LaplacianFINet(nn.Module):
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
 
-        #fused = self.ssff([x1, x2, x3])
-        #fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+        fused = self.ssff([x1, x2, x3])
+        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
 
-        #out4 = self.asf4([out4, fused])
+        out4 = self.asf4([out4, fused])
 
         out3 = self.gelu(
             self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
