@@ -81,17 +81,17 @@ class DeBlock(nn.Module):
         self.conv3 = DepthwiseSeparableConv(in_channels=out_channels, out_channels=out_channels, kernel_size=(3, 1),
                                               padding=(1, 0), bias=True)
         self.bn = nn.BatchNorm2d(out_channels)
-        #self.lap_decoder = Decoder(out_channels, out_channels)
+        self.lap_decoder = Decoder(out_channels, out_channels)
 
     def forward(self, x):
         x = self.conv(x)
         x = self.conv1(x) + self.conv2(x) + self.conv3(x)
         x = self.bn(x)
         # Apply LAP decoder
-        #low_out, middle_out, top_out = self.lap_decoder(x)
+        low_out, middle_out, top_out = self.lap_decoder(x)
         # Combine all branches (hierarchical upsampling)
-        #combined = low_out + middle_out + top_out
-        return x
+        combined = low_out + middle_out + top_out
+        return combined
 
 class LFA(nn.Module):
     """Low Frequency Injection Module (unchanged from original)"""
