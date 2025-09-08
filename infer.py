@@ -63,7 +63,7 @@ def evaluate(pred_path, dataset):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="FINet Inference + Evaluation Script")
-    parser.add_argument('--ckpt', type=str, default=None,
+    parser.add_argument('--ckpt', type=str, default="/kaggle/input/lafinet-ffm-asf/LAFINet_ASF_epoch200.pth",
                         help="Path to a specific checkpoint. If not provided, loads the latest one.")
     parser.add_argument('--datasets', type=str, nargs='+',
                         default=['CHAMELEON', 'CAMO', 'COD10K', 'NC4K'],

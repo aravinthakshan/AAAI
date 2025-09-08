@@ -245,14 +245,14 @@ class LaplacianFINet(nn.Module):
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
         
-        self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
-        self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
+        #self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
+        #self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
 
-        #self.asf4 = asf_attention_model(channels[3])
-        #self.asf3 = asf_attention_model(channels[2])
-        #self.asf2 = asf_attention_model(channels[1])
-        #self.asf1 = asf_attention_model(channels[0])
-        #self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
+        self.asf4 = asf_attention_model(channels[3])
+        self.asf3 = asf_attention_model(channels[2])
+        self.asf2 = asf_attention_model(channels[1])
+        self.asf1 = asf_attention_model(channels[0])
+        self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
 
     def forward(self, x, high, low):
         # Generate 3-level Laplacian pyramid from input
@@ -279,14 +279,14 @@ class LaplacianFINet(nn.Module):
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
 
-        x3 = self.rcca_out3(x3) # added rcca here
+        #x3 = self.rcca_out3(x3) # added rcca here
         # RCCA Block, this could add lots of overhead remove later
-        out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
+        #out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
 
-        #fused = self.ssff([x1, x2, x3])
-        #fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+        fused = self.ssff([x1, x2, x3])
+        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
 
-        #out4 = self.asf4([out4, fused])
+        out4 = self.asf4([out4, fused])
 
         out3 = self.gelu(
             self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
