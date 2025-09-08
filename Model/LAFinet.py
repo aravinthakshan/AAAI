@@ -227,6 +227,8 @@ class LaplacianFINet(nn.Module):
         self.re_conv4 = ConvBNGeLU(in_channels=stage_channels[4], out_channels=channels[3], kernel_size=1)
         
         # Enhanced frequency fusion modules - only for 3 stages + final stage
+        self.ffm1 = FSM_FFM(channels[0])
+        self.ffm2 = FSM_FFM(channels[1])
         self.ffm3 = FSM_FFM(channels[2])
         self.ffm4 = FSM_FFM(channels[3])
         
@@ -242,11 +244,9 @@ class LaplacianFINet(nn.Module):
         self.out_conv3 = nn.Conv2d(channels[2], 1, kernel_size=3, padding=1)
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
-
+        
         self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
         self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
-        self.rcca_out2 = RCCAModule(channels[1])
-        self.rcca_out1 = RCCAModule(channels[0])
 
         #self.asf4 = asf_attention_model(channels[3])
         #self.asf3 = asf_attention_model(channels[2])
