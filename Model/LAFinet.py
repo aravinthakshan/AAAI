@@ -6,6 +6,7 @@ from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
 from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock, LDConv, asf_attention_model, ScalSeq
 from Model.Replacements import FSM_FFM
+from Model.ccnet import RCCAModule  
 
 class Decoder(nn.Module):
     """Lap decoder with Low, Middle, and Top branches"""
@@ -226,8 +227,6 @@ class LaplacianFINet(nn.Module):
         self.re_conv4 = ConvBNGeLU(in_channels=stage_channels[4], out_channels=channels[3], kernel_size=1)
         
         # Enhanced frequency fusion modules - only for 3 stages + final stage
-        self.ffm1 = FSM_FFM(channels[0])
-        self.ffm2 = FSM_FFM(channels[1])
         self.ffm3 = FSM_FFM(channels[2])
         self.ffm4 = FSM_FFM(channels[3])
         
@@ -243,6 +242,11 @@ class LaplacianFINet(nn.Module):
         self.out_conv3 = nn.Conv2d(channels[2], 1, kernel_size=3, padding=1)
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
+
+        self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
+        self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
+        self.rcca_out2 = RCCAModule(channels[1])
+        self.rcca_out1 = RCCAModule(channels[0])
 
         #self.asf4 = asf_attention_model(channels[3])
         #self.asf3 = asf_attention_model(channels[2])
@@ -274,6 +278,10 @@ class LaplacianFINet(nn.Module):
         x2 = self.ffm2(x=x2, high=high, low=low)
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
+
+        x3 = self.rcca_out3(x3) # added rcca here
+        # RCCA Block, this could add lots of overhead remove later
+        out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
 
         #fused = self.ssff([x1, x2, x3])
         #fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
