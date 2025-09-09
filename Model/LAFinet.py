@@ -294,6 +294,10 @@ class LaplacianFINet(nn.Module):
             self.deconv2(F.interpolate(out3, size=x2.shape[2:], mode='bilinear', align_corners=False)) + x2)
         out1 = self.gelu(
             self.deconv1(F.interpolate(out2, size=x1.shape[2:], mode='bilinear', align_corners=False)) + x1)
+        
+        fused = self.ssff([out1, out2, out3])
+        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+        out4 = self.asf4([out4, fused])
 
         # Generate outputs at multiple scales
         out1 = self.out_conv1(out1)
