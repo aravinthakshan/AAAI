@@ -248,11 +248,11 @@ class LaplacianFINet(nn.Module):
         self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
         self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
 
-        #self.asf4 = asf_attention_model(channels[3])
-        #self.asf3 = asf_attention_model(channels[2])
-        #self.asf2 = asf_attention_model(channels[1])
-        #self.asf1 = asf_attention_model(channels[0])
-        #self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
+        self.asf4 = asf_attention_model(channels[3])
+        self.asf3 = asf_attention_model(channels[2])
+        self.asf2 = asf_attention_model(channels[1])
+        self.asf1 = asf_attention_model(channels[0])
+        self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
 
     def forward(self, x, high, low):
         # Generate 3-level Laplacian pyramid from input
