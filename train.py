@@ -100,7 +100,7 @@ if __name__ == '__main__':
     parser.add_argument('--backbone', type=str, default='efficientb0',
                         choices=['efficientb0', 'tinynet-a'],
                         help='Backbone network for FINet')
-    parser.add_argument('--optimizer', type=str, default='adam',
+    parser.add_argument('--optimizer', type=str, default='soap',
                         choices=['adam', 'sgd','soap'],
                         help='Optimizer type')
     parser.add_argument('--scheduler', type=str, default='cosine',
