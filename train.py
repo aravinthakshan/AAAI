@@ -212,6 +212,15 @@ if __name__ == '__main__':
         scheduler.load_state_dict(ckpt['scheduler'])
         start_epoch = ckpt['epoch']
         print(f"Checkpoint loaded. Resuming from epoch {start_epoch}")
+    elif args.ckpt:
+        latest_ckpt = args.ckpt
+        print(f"Resuming training from checkpoint {latest_ckpt}...")
+        ckpt = torch.load(latest_ckpt, map_location=cfg.device)
+        model.load_state_dict(ckpt['model'])
+        optimizer.load_state_dict(ckpt['optimizer'])
+        scheduler.load_state_dict(ckpt['scheduler'])
+        start_epoch = ckpt['epoch']
+        print(f"Checkpoint loaded. Resuming from epoch {start_epoch}")
     else:
         print("No checkpoint found. Training from scratch.")
 
