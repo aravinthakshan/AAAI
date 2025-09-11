@@ -199,7 +199,7 @@ if __name__ == '__main__':
 
     # ---- Resume from checkpoint ----
     os.makedirs(args.save_dir, exist_ok=True)
-    checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "FINet_epoch*.pth")))
+    checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "LAFINet*.pth")))
 
     start_epoch = 0
     if checkpoints and args.trial == True:
