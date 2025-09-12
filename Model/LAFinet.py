@@ -279,14 +279,14 @@ class LaplacianFINet(nn.Module):
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
 
-        x3 = self.rcca_out3(x3) # added rcca here
+        #x3 = self.rcca_out3(x3) # added rcca here
         # RCCA Block, this could add lots of overhead remove later
-        out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
+        #out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
 
-        #fused = self.ssff([x1, x2, x3])
-        #fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+        fused = self.ssff([x1, x2, x3])
+        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
 
-        #out4 = self.asf4([out4, fused])
+        out4 = self.asf4([out4, fused])
 
         out3 = self.gelu(
             self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
@@ -294,10 +294,6 @@ class LaplacianFINet(nn.Module):
             self.deconv2(F.interpolate(out3, size=x2.shape[2:], mode='bilinear', align_corners=False)) + x2)
         out1 = self.gelu(
             self.deconv1(F.interpolate(out2, size=x1.shape[2:], mode='bilinear', align_corners=False)) + x1)
-        
-        fused = self.ssff([out1, out2, out3])
-        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
-        out4 = self.asf4([out4, fused])
 
         # Generate outputs at multiple scales
         out1 = self.out_conv1(out1)
