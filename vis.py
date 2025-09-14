@@ -114,8 +114,9 @@ def process_single_image(image_path, model, cfg, save_dir="visualization_folder"
         output = model(img_tensor, high, low)[0]
         
         # Resize output to original image size
-        output = F.interpolate(output, size=original_size, mode='bilinear', align_corners=True)
-        
+        # Keep output at fixed inference size (same as testsize)
+        output = F.interpolate(output, size=(256, 256), mode='bilinear', align_corners=True)
+
         # Convert to numpy
         output = torch.sigmoid(output) * 255
         output_np = output.squeeze(0).squeeze(0).detach().cpu().numpy().astype(np.uint8)
