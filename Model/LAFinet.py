@@ -245,8 +245,8 @@ class LaplacianFINet(nn.Module):
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
         
-        #self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
-        #self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
+        self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
+        self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
 
         self.asf4 = asf_attention_model(channels[3])
         self.asf3 = asf_attention_model(channels[2])
