@@ -216,7 +216,7 @@ if __name__ == '__main__':
         latest_ckpt = args.ckpt
         print(f"Resuming training from checkpoint {latest_ckpt}...")
         ckpt = torch.load(latest_ckpt, map_location=cfg.device)
-        model.load_state_dict(ckpt['model'])
+        model.load_state_dict(ckpt['model'], strict=False)
         optimizer.load_state_dict(ckpt['optimizer'])
         scheduler.load_state_dict(ckpt['scheduler'])
         start_epoch = ckpt['epoch']
