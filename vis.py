@@ -117,6 +117,7 @@ if __name__ == '__main__':
     model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
 
     if args.model == 'LAFinet':
+        print("Initialized")
         model = LaplacianFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
     
 
