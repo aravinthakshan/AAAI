@@ -66,7 +66,6 @@ def process_single_image(image_path, model, cfg, save_dir="visualization_folder"
 def main():
     parser = argparse.ArgumentParser(description="Simple Single Image Inference")
     parser.add_argument('--image', type=str, required=True, help="Path to input image")
-    parser.add_argument('--ckpt', type=str, required=True, help="Path to model checkpoint")
     parser.add_argument('--model', type=str, default='FINet', choices=['FINet', 'LaFINet'], help="Model type")
     parser.add_argument('--save_dir', type=str, default="visualization_folder", help="Directory to save output")
     
