@@ -82,17 +82,17 @@ class DeBlock(nn.Module):
         self.conv3 = DepthwiseSeparableConv(in_channels=out_channels, out_channels=out_channels, kernel_size=(3, 1),
                                               padding=(1, 0), bias=True)
         self.bn = nn.BatchNorm2d(out_channels)
-        self.lap_decoder = Decoder(out_channels, out_channels)
+        #self.lap_decoder = Decoder(out_channels, out_channels)
 
     def forward(self, x):
         x = self.conv(x)
         x = self.conv1(x) + self.conv2(x) + self.conv3(x)
         x = self.bn(x)
         # Apply LAP decoder
-        low_out, middle_out, top_out = self.lap_decoder(x)
+        #low_out, middle_out, top_out = self.lap_decoder(x)
         # Combine all branches (hierarchical upsampling)
-        combined = low_out + middle_out + top_out
-        return combined
+        #combined = low_out + middle_out + top_out
+        return x
 
 class LFA(nn.Module):
     """Low Frequency Injection Module (unchanged from original)"""
@@ -245,8 +245,8 @@ class LaplacianFINet(nn.Module):
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
         
-        self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
-        self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
+        #self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
+        #self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
 
         self.asf4 = asf_attention_model(channels[3])
         self.asf3 = asf_attention_model(channels[2])
