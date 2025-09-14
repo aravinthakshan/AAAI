@@ -11,6 +11,8 @@ from config import Config
 from utils.dataloader_freq import TestDataset
 from utils.metrics import EvaluationMetrics
 from Model.LAFinet import LaplacianFINet
+from utils.dct import dct_2d
+import pickle
 
 def inference(datasets, save_dir="prediction_maps"):
     global model, cfg

@@ -8,6 +8,81 @@ from Model.FINet import FINet
 from config import Config
 from PIL import Image
 import torchvision.transforms as transforms
+from utils.dct import dct_2d
+import pickle
+
+class SingleImageProcessor:
+    def __init__(self, testsize=384):
+        self.testsize = testsize
+        
+        # Define transforms (matching TestDataset)
+        self.freq_transform = transforms.Compose([
+            transforms.Resize((self.testsize, self.testsize)),
+            transforms.PILToTensor()
+        ])
+        
+        self.transform = transforms.Compose([
+            transforms.Resize((self.testsize, self.testsize)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+        
+        # Load frequency normalization stats
+        try:
+            with open('./utils/freq_mean_std.pkl', 'rb') as f:
+                freq_stats = pickle.load(f)
+            self.freq_norm = transforms.Normalize(mean=freq_stats['mean'], std=freq_stats['std'])
+        except FileNotFoundError:
+            print("Warning: freq_mean_std.pkl not found. Using dummy frequency components.")
+            self.freq_norm = None
+    
+    def rgb_loader(self, path):
+        with open(path, 'rb') as f:
+            img = Image.open(f)
+            return img.convert('RGB')
+    
+    def freq_decompose(self, freq):
+        """Decompose frequency into high and low components"""
+        freq_y = freq[0:64, :, :]
+        freq_Cb = freq[64:128, :, :]
+        freq_Cr = freq[128:192, :, :]
+        
+        high = torch.cat([freq_y[32:, :, :], freq_Cb[32:, :, :], freq_Cr[32:, :, :]], dim=0)
+        low = torch.cat([freq_y[:32, :, :], freq_Cb[:32, :, :], freq_Cr[:32, :, :]], dim=0)
+        
+        return high, low
+    
+    def process_image(self, image_path):
+        """Process single image and return tensors ready for model"""
+        # Load image
+        image = self.rgb_loader(image_path)
+        
+        # Get original size for later resizing
+        original_size = image.size[::-1]  # (height, width)
+        
+        # Process frequency components
+        if self.freq_norm is not None:
+            try:
+                freq = self.freq_transform(image).unsqueeze(0)
+                freq = dct_2d(freq).squeeze(0)
+                freq = self.freq_norm(freq) / 7.0
+                high, low = self.freq_decompose(freq)
+            except Exception as e:
+                print(f"Warning: Frequency processing failed: {e}. Using dummy components.")
+                high, low = self._create_dummy_freq_components()
+        else:
+            high, low = self._create_dummy_freq_components()
+        
+        # Process main image
+        image_tensor = self.transform(image)
+        
+        return image_tensor, high, low, original_size
+    
+    def _create_dummy_freq_components(self):
+        """Create dummy frequency components if DCT processing fails"""
+        high = torch.zeros(96, self.testsize, self.testsize)  # 32*3 channels
+        low = torch.zeros(96, self.testsize, self.testsize)   # 32*3 channels
+        return high, low
 
 def process_single_image(image_path, model, cfg, save_dir="visualization_folder"):
     """
@@ -22,31 +97,21 @@ def process_single_image(image_path, model, cfg, save_dir="visualization_folder"
     output_filename = f"{name}_output.jpg"
     output_path = os.path.join(save_dir, output_filename)
     
-    # Load and preprocess image
-    image = Image.open(image_path).convert('RGB')
+    # Initialize processor
+    processor = SingleImageProcessor(testsize=cfg.trainsize)
     
-    # Define transforms (matching your training setup)
-    transform = transforms.Compose([
-        transforms.Resize((cfg.trainsize, cfg.trainsize)),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    ])
+    # Process image
+    img_tensor, high, low, original_size = processor.process_image(image_path)
     
-    # Transform image
-    img_tensor = transform(image).unsqueeze(0).cuda()
-    
-    # Create dummy high and low frequency components (since we don't have them for single image)
-    # You might need to adjust this based on how your dataloader creates these
-    high = torch.zeros_like(img_tensor).cuda()
-    low = torch.zeros_like(img_tensor).cuda()
+    # Move to GPU and add batch dimension
+    img_tensor = img_tensor.unsqueeze(0).cuda()
+    high = high.unsqueeze(0).cuda()
+    low = low.unsqueeze(0).cuda()
     
     # Run inference
     model.eval()
     with torch.no_grad():
         output = model(img_tensor, high, low)[0]
-        
-        # Get original image size for proper resizing
-        original_size = image.size[::-1]  # PIL uses (width, height), we need (height, width)
         
         # Resize output to original image size
         output = F.interpolate(output, size=original_size, mode='bilinear', align_corners=True)
@@ -75,11 +140,10 @@ def main():
     if not os.path.exists(args.image):
         print(f"Error: Image file {args.image} does not exist!")
         return
-    
+        
     # Load config
     cfg = Config()
     
-    # Load model
     from Model.LAFinet import LaplacianFINet
     model = LaplacianFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
     
@@ -91,7 +155,7 @@ def main():
     # Process image
     output_path = process_single_image(args.image, model, cfg, args.save_dir)
     
-    print(f"\n🎉 Done! Check your output at: {output_path}")
+    print(f"\n Done! Check your output at: {output_path}")
 
 if __name__ == '__main__':
     main()
