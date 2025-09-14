@@ -6,7 +6,6 @@ from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
 from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock, LDConv, asf_attention_model, ScalSeq
 from Model.Replacements import FSM_FFM
-from Model.ccnet import RCCAModule  
 
 class Decoder(nn.Module):
     """Lap decoder with Low, Middle, and Top branches"""
@@ -82,17 +81,17 @@ class DeBlock(nn.Module):
         self.conv3 = DepthwiseSeparableConv(in_channels=out_channels, out_channels=out_channels, kernel_size=(3, 1),
                                               padding=(1, 0), bias=True)
         self.bn = nn.BatchNorm2d(out_channels)
-        #self.lap_decoder = Decoder(out_channels, out_channels)
+        self.lap_decoder = Decoder(out_channels, out_channels)
 
     def forward(self, x):
         x = self.conv(x)
         x = self.conv1(x) + self.conv2(x) + self.conv3(x)
         x = self.bn(x)
         # Apply LAP decoder
-        #low_out, middle_out, top_out = self.lap_decoder(x)
+        low_out, middle_out, top_out = self.lap_decoder(x)
         # Combine all branches (hierarchical upsampling)
-        #combined = low_out + middle_out + top_out
-        return x
+        combined = low_out + middle_out + top_out
+        return combined
 
 class LFA(nn.Module):
     """Low Frequency Injection Module (unchanged from original)"""
@@ -234,6 +233,25 @@ class LaplacianFINet(nn.Module):
         
         # activation
         self.gelu = nn.GELU()
+        """
+        # Simple upsampling layers instead of decoder blocks
+        self.upsample3 = nn.Sequential(
+            nn.ConvTranspose2d(channels[3], channels[2], kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(channels[2]),
+            nn.GELU()
+        )
+        
+        self.upsample2 = nn.Sequential(
+            nn.ConvTranspose2d(channels[2], channels[1], kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(channels[1]),
+            nn.GELU()
+        )
+        
+        self.upsample1 = nn.Sequential(
+            nn.ConvTranspose2d(channels[1], channels[0], kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(channels[0]),
+            nn.GELU()
+        )"""
 
         self.deconv3 = DeBlock(channels[3], channels[2]) 
         self.deconv2 = DeBlock(channels[2], channels[1])
@@ -244,9 +262,6 @@ class LaplacianFINet(nn.Module):
         self.out_conv3 = nn.Conv2d(channels[2], 1, kernel_size=3, padding=1)
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
-        
-        #self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
-        #self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
 
         self.asf4 = asf_attention_model(channels[3])
         self.asf3 = asf_attention_model(channels[2])
@@ -278,10 +293,6 @@ class LaplacianFINet(nn.Module):
         x2 = self.ffm2(x=x2, high=high, low=low)
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
-
-        #x3 = self.rcca_out3(x3) # added rcca here
-        # RCCA Block, this could add lots of overhead remove later
-        #out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
 
         fused = self.ssff([x1, x2, x3])
         fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
