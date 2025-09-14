@@ -122,7 +122,7 @@ if __name__ == '__main__':
 
     # ---- Load checkpoint ----
     if args.ckpt is not None:
-        checkpoint = torch.load(args.ckpt, map_location=cfg.device, weights_only=False)
+        checkpoint = torch.load("/kaggle/input/bestmodel/pytorch/default/1/FINet_epoch200.pth", map_location=cfg.device, weights_only=False)
         print(f"Loaded checkpoint from {args.ckpt}")
     if args.model == 'LAFinet':
         model.load_state_dict(checkpoint['model'])
