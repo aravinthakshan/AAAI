@@ -76,11 +76,6 @@ def main():
         print(f"Error: Image file {args.image} does not exist!")
         return
     
-    # Check if checkpoint exists
-    if not os.path.exists(args.ckpt):
-        print(f"Error: Checkpoint file {args.ckpt} does not exist!")
-        return
-    
     # Load config
     cfg = Config()
     
