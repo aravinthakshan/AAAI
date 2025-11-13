@@ -4,8 +4,9 @@ import torch.nn.functional as F
 from Model.EfficientNet import EfficientNet_B0
 from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
-from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock, LDConv, asf_attention_model, ScalSeq
+from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock, LDConv, asf_attention_model, ScalSeq, GOLDYOLO_Attention
 from Model.Replacements import FSM_FFM
+from Model.ccnet import RCCAModule  
 
 class Decoder(nn.Module):
     """Lap decoder with Low, Middle, and Top branches"""
@@ -233,25 +234,6 @@ class LaplacianFINet(nn.Module):
         
         # activation
         self.gelu = nn.GELU()
-        """
-        # Simple upsampling layers instead of decoder blocks
-        self.upsample3 = nn.Sequential(
-            nn.ConvTranspose2d(channels[3], channels[2], kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.BatchNorm2d(channels[2]),
-            nn.GELU()
-        )
-        
-        self.upsample2 = nn.Sequential(
-            nn.ConvTranspose2d(channels[2], channels[1], kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.BatchNorm2d(channels[1]),
-            nn.GELU()
-        )
-        
-        self.upsample1 = nn.Sequential(
-            nn.ConvTranspose2d(channels[1], channels[0], kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.BatchNorm2d(channels[0]),
-            nn.GELU()
-        )"""
 
         self.deconv3 = DeBlock(channels[3], channels[2]) 
         self.deconv2 = DeBlock(channels[2], channels[1])
@@ -262,12 +244,20 @@ class LaplacianFINet(nn.Module):
         self.out_conv3 = nn.Conv2d(channels[2], 1, kernel_size=3, padding=1)
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
+        
+        #self.rcca_out4 = RCCAModule(channels[3]) # might cause dimensions issues.
+        #self.rcca_out3 = RCCAModule(channels[2]) # this will cause overhead for sure.
 
-        self.asf4 = asf_attention_model(channels[3])
-        self.asf3 = asf_attention_model(channels[2])
-        self.asf2 = asf_attention_model(channels[1])
-        self.asf1 = asf_attention_model(channels[0])
-        self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
+        #self.asf4 = asf_attention_model(channels[3])
+        #self.asf3 = asf_attention_model(channels[2])
+        #self.asf2 = asf_attention_model(channels[1])
+        #self.asf1 = asf_attention_model(channels[0])
+        #self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
+
+        self.gold4 = GOLDYOLO_Attention(channels[3])
+        self.gold3 = GOLDYOLO_Attention(channels[2])
+        self.gold2 = GOLDYOLO_Attention(channels[1])
+        self.gold1 = GOLDYOLO_Attention(channels[0])
 
     def forward(self, x, high, low):
         # Generate 3-level Laplacian pyramid from input
@@ -294,10 +284,19 @@ class LaplacianFINet(nn.Module):
         x3 = self.ffm3(x=x3, high=high, low=low)
         out4 = self.ffm4(x=x4, high=high, low=low)
 
-        fused = self.ssff([x1, x2, x3])
-        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+        #x3 = self.rcca_out3(x3) # added rcca here
+        # RCCA Block, this could add lots of overhead remove later
+        #out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
 
-        out4 = self.asf4([out4, fused])
+        #fused = self.ssff([x1, x2, x3])
+        #fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+
+        #out4 = self.asf4([out4, fused])
+
+        x1 = self.gold1(x1)
+        x2 = self.gold1(x2)
+        x3 = self.gold1(x3)
+        out4 = self.gold1(out4)
 
         out3 = self.gelu(
             self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
