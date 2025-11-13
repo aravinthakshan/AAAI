@@ -294,9 +294,9 @@ class LaplacianFINet(nn.Module):
         #out4 = self.asf4([out4, fused])
 
         x1 = self.gold1(x1)
-        x2 = self.gold1(x2)
-        x3 = self.gold1(x3)
-        out4 = self.gold1(out4)
+        x2 = self.gold2(x2)
+        x3 = self.gold3(x3)
+        out4 = self.gold4(out4)
 
         out3 = self.gelu(
             self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
