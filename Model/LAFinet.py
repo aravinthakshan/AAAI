@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from Model.EfficientNet import EfficientNet_B0
 from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
-from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock, LDConv, asf_attention_model, ScalSeq, GOLDYOLO_Attention
+from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock, LDConv, asf_attention_model, ScalSeq, GOLDYOLO_Attention, top_Block
 from Model.Replacements import FSM_FFM
 from Model.ccnet import RCCAModule  
 
@@ -254,10 +254,10 @@ class LaplacianFINet(nn.Module):
         #self.asf1 = asf_attention_model(channels[0])
         #self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
 
-        self.gold4 = GOLDYOLO_Attention(channels[3])
-        self.gold3 = GOLDYOLO_Attention(channels[2])
-        self.gold2 = GOLDYOLO_Attention(channels[1])
-        self.gold1 = GOLDYOLO_Attention(channels[0])
+        self.gold4 = top_Block(channels[3])
+        self.gold3 = top_Block(channels[2])
+        self.gold2 = top_Block(channels[1])
+        self.gold1 = top_Block(channels[0])
 
     def forward(self, x, high, low):
         # Generate 3-level Laplacian pyramid from input
