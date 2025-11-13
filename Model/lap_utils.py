@@ -619,7 +619,7 @@ class DropPath(nn.Module):
     
 class top_Block(nn.Module):
     
-    def __init__(self, dim, key_dim, num_heads, mlp_ratio=4., attn_ratio=2., drop=0.,
+    def __init__(self, dim, key_dim = 4, num_heads =2, mlp_ratio=4., attn_ratio=2., drop=0.,
                  drop_path=0.):
         super().__init__()
         self.dim = dim
