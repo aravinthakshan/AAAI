@@ -30,14 +30,14 @@ def train(start_epoch=0, model_name = "LAFinet"):
 
             out1, out2, out3, out4 = model(img, high, low)
 
-            if model_name == "FINet":
+            #if model_name == "FINet":
 
-                loss1 = structure_loss(out1, mask)
-                loss2 = structure_loss(out2, mask)
-                loss3 = structure_loss(out3, mask)
-                loss4 = structure_loss(out4, mask)
-                loss = loss1 + loss2 + loss3 + loss4
-            else:
+            loss1 = structure_loss(out1, mask)
+            loss2 = structure_loss(out2, mask)
+            loss3 = structure_loss(out3, mask)
+            loss4 = structure_loss(out4, mask)
+            loss = loss1 + loss2 + loss3 + loss4
+            """else:
                 output_shapes = [
                 out1.shape[2:],  # out1 shape
                 out2.shape[2:],  # out2 shape  
@@ -50,7 +50,7 @@ def train(start_epoch=0, model_name = "LAFinet"):
                 loss3 = lap_structure_loss(out3, mask_pyramid[2])
                 loss4 = lap_structure_loss(out4, mask_pyramid[3])
 
-                loss = 1.0 * loss1 + 0.8 * loss2 + 0.6 * loss3 + 0.4 * loss4
+                loss = 1.0 * loss1 + 0.8 * loss2 + 0.6 * loss3 + 0.4 * loss4"""
 
             loss.backward()
             optimizer.step()
