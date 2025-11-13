@@ -537,7 +537,7 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
     return p
    
 class GOLDYOLO_Attention(torch.nn.Module):
-    def __init__(self, dim, key_dim = 16, num_heads = 2, attn_ratio=4):
+    def __init__(self, dim, key_dim = 2, num_heads = 2, attn_ratio=4):
         super().__init__()
         self.num_heads = num_heads
         self.scale = key_dim ** -0.5
