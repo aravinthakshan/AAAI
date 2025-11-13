@@ -501,3 +501,70 @@ def lap_structure_loss(logits, mask, alpha=0.7, beta=0.3):
     edge_loss = F.mse_loss(pred_edges, mask_edges)
     
     return alpha * struct_loss + beta * edge_loss
+
+class Conv(nn.Module):
+    """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)."""
+
+    default_act = nn.SiLU()  # default activation
+
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
+        """Initialize Conv layer with given arguments including activation."""
+        super().__init__()
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+    def forward(self, x):
+        """Apply convolution, batch normalization and activation to input tensor."""
+        return self.act(self.bn(self.conv(x)))
+
+    def forward_fuse(self, x):
+        """Perform transposed convolution of 2D data."""
+        return self.act(self.conv(x))
+ 
+def get_shape(tensor):
+    shape = tensor.shape
+    if torch.onnx.is_in_onnx_export():
+        shape = [i.cpu().numpy() for i in shape]
+    return shape
+
+def autopad(k, p=None, d=1):  # kernel, padding, dilation
+    """Pad to 'same' shape outputs."""
+    if d > 1:
+        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
+    if p is None:
+        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
+    return p
+   
+class GOLDYOLO_Attention(torch.nn.Module):
+    def __init__(self, dim, key_dim, num_heads, attn_ratio=4):
+        super().__init__()
+        self.num_heads = num_heads
+        self.scale = key_dim ** -0.5
+        self.key_dim = key_dim
+        self.nh_kd = nh_kd = key_dim * num_heads  # num_head key_dim
+        self.d = int(attn_ratio * key_dim)
+        self.dh = int(attn_ratio * key_dim) * num_heads
+        self.attn_ratio = attn_ratio
+        
+        self.to_q = Conv(dim, nh_kd, 1, act=False)
+        self.to_k = Conv(dim, nh_kd, 1, act=False)
+        self.to_v = Conv(dim, self.dh, 1, act=False)
+        
+        self.proj = torch.nn.Sequential(nn.ReLU6(), Conv(self.dh, dim, act=False))
+    
+    def forward(self, x):  # x (B,N,C)
+        B, C, H, W = get_shape(x)
+        
+        qq = self.to_q(x).reshape(B, self.num_heads, self.key_dim, H * W).permute(0, 1, 3, 2)
+        kk = self.to_k(x).reshape(B, self.num_heads, self.key_dim, H * W)
+        vv = self.to_v(x).reshape(B, self.num_heads, self.d, H * W).permute(0, 1, 3, 2)
+        
+        attn = torch.matmul(qq, kk)
+        attn = attn.softmax(dim=-1)  # dim = k
+        
+        xx = torch.matmul(attn, vv)
+        
+        xx = xx.permute(0, 1, 3, 2).reshape(B, self.dh, H, W)
+        xx = self.proj(xx)
+        return xx
