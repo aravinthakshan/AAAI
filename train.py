@@ -10,7 +10,8 @@ import os
 import glob
 import argparse
 from utils.soap import SOAP
-from utils.loss import structure_loss, create_mask_pyramid, lap_structure_loss
+from utils.loss import structure_loss, create_mask_pyramid
+from Model.lap_utils import MultiScaleLapLoss
 import wandb
 
 def train(start_epoch=0, model_name = "LAFinet"):
@@ -30,29 +31,26 @@ def train(start_epoch=0, model_name = "LAFinet"):
 
             out1, out2, out3, out4 = model(img, high, low)
 
-            #if model_name == "FINet":
-            # has structure loss 
-            # loss1 = structure_loss(out1, mask)
-            # loss2 = structure_loss(out2, mask)
-            # loss3 = structure_loss(out3, mask)
-            # loss4 = structure_loss(out4, mask)
-            # loss = loss1 + loss2 + loss3 + loss4
-            # else:
-
-            # has multi scale lap loss
-            output_shapes = [
+            if model_name == "FINet":
+                loss1 = structure_loss(out1, mask)
+                loss2 = structure_loss(out2, mask)
+                loss3 = structure_loss(out3, mask)
+                loss4 = structure_loss(out4, mask)
+                loss = loss1 + loss2 + loss3 + loss4
+            else:
+                output_shapes = [
                 out1.shape[2:],  # out1 shape
                 out2.shape[2:],  # out2 shape  
                 out3.shape[2:],  # out3 shape
                 out4.shape[2:]   # out4 shape
-            ]
-            mask_pyramid = create_mask_pyramid(mask, output_shapes)
-            loss1 = lap_structure_loss(out1, mask_pyramid[0])
-            loss2 = lap_structure_loss(out2, mask_pyramid[1])
-            loss3 = lap_structure_loss(out3, mask_pyramid[2])
-            loss4 = lap_structure_loss(out4, mask_pyramid[3])
+                ]
+                mask_pyramid = create_mask_pyramid(mask, output_shapes)
+                loss1 = MultiScaleLapLoss(out1, mask_pyramid[0])
+                loss2 = MultiScaleLapLoss(out2, mask_pyramid[1])
+                loss3 = MultiScaleLapLoss(out3, mask_pyramid[2])
+                loss4 = MultiScaleLapLoss(out4, mask_pyramid[3])
 
-            loss = 1.0 * loss1 + 0.8 * loss2 + 0.6 * loss3 + 0.4 * loss4
+                loss = 1.0 * loss1 + 0.8 * loss2 + 0.6 * loss3 + 0.4 * loss4
 
             loss.backward()
             optimizer.step()
@@ -131,8 +129,8 @@ if __name__ == '__main__':
     #WANDB
 
     try:
-        # from kaggle_secrets import UserSecretsClient
-        # user_secrets = UserSecretsClient()
+        from kaggle_secrets import UserSecretsClient
+        user_secrets = UserSecretsClient()
         wandb_api_key = "4cdb0327752ba297aeb4f82dcc902d5f2e1d5eae"
         wandb.login(key=wandb_api_key)
         print("Logged into wandb successfully.")
@@ -227,4 +225,5 @@ if __name__ == '__main__':
         print("No checkpoint found. Training from scratch.")
 
     train(start_epoch=start_epoch, model_name=args.model)
+    
     

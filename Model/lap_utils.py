@@ -426,81 +426,43 @@ def structure_loss(logits, mask):
     wiou = 1 - (inter + 1) / (union - inter + 1)
     return (wbce + wiou).mean()
 
-
-def laplacian_pyramid_loss(pred_pyramid, mask_pyramid, weights=None):
+class MultiScaleLapLoss(nn.Module):
     """
-    Multi-scale loss using Laplacian pyramid levels
-    
-    Args:
-        pred_pyramid: List of predicted masks at different scales
-        mask_pyramid: List of ground truth masks at different scales  
-        weights: Optional weights for different scales
+    Computes multi-scale Laplacian Pyramid loss using your LaplacianPyramid module.
     """
-    if weights is None:
-        weights = [1.0, 0.8, 0.6, 0.4]
-    
-    total_loss = 0
-    for i, (pred, mask, weight) in enumerate(zip(pred_pyramid, mask_pyramid, weights)):
-        # Resize mask to match prediction if needed
-        if mask.shape[2:] != pred.shape[2:]:
-            mask = F.interpolate(mask, size=pred.shape[2:], mode='bilinear', align_corners=False)
+    def __init__(self, num_levels=3, alpha=0.7, beta=0.3):
+        super().__init__()
+        self.alpha = alpha     # weight for structure loss
+        self.beta = beta       # weight for Lap pyramid loss
+        self.num_levels = num_levels
         
-        loss = structure_loss(pred, mask)
-        total_loss += weight * loss
-    
-    return total_loss
+        # Your LaplacianPyramid class
+        self.lap_pyr = LaplacianPyramid(num_levels=num_levels)
 
+    def forward(self, logits, mask):
+        # Resize mask if needed
+        if mask.shape[2:] != logits.shape[2:]:
+            mask = F.interpolate(mask, size=logits.shape[2:], mode='bilinear', align_corners=False)
 
-def create_mask_pyramid(mask, output_shapes):
-    """
-    Create a pyramid of ground truth masks matching the output shapes
-    
-    Args:
-        mask: Original ground truth mask
-        output_shapes: List of tuples containing (H, W) for each output level
-    """
-    mask_pyramid = []
-    
-    for shape in output_shapes:
-        h, w = shape
-        resized_mask = F.interpolate(mask, size=(h, w), mode='bilinear', align_corners=False)
-        mask_pyramid.append(resized_mask)
-    
-    return mask_pyramid
+        # Base structural loss
+        struct_loss = structure_loss(logits, mask)
 
+        # Sigmoid prediction
+        pred = torch.sigmoid(logits)
 
-def lap_structure_loss(logits, mask, alpha=0.7, beta=0.3):
-    """
-    Enhanced loss function combining structure loss with edge-aware loss
-    
-    Args:
-        logits: Predicted logits
-        mask: Ground truth mask
-        alpha: Weight for structure loss
-        beta: Weight for edge loss
-    """
-    # Ensure mask and logits have the same spatial dimensions
-    if mask.shape[2:] != logits.shape[2:]:
-        mask = F.interpolate(mask, size=logits.shape[2:], mode='bilinear', align_corners=False)
-    
-    # Original structure loss
-    struct_loss = structure_loss(logits, mask)
-    
-    # Edge-aware loss using Laplacian operator
-    laplacian_kernel = torch.tensor([[[[-1, -1, -1],
-                                      [-1,  8, -1],
-                                      [-1, -1, -1]]]], dtype=torch.float32).to(logits.device)
-    
-    pred = torch.sigmoid(logits)
-    
-    # Apply Laplacian filter to get edges
-    pred_edges = F.conv2d(pred, laplacian_kernel, padding=1)
-    mask_edges = F.conv2d(mask, laplacian_kernel, padding=1)
-    
-    # Edge loss
-    edge_loss = F.mse_loss(pred_edges, mask_edges)
-    
-    return alpha * struct_loss + beta * edge_loss
+        # Build Laplacian pyramids
+        pred_pyr = self.lap_pyr(pred)
+        mask_pyr = self.lap_pyr(mask)
+
+        # Multi-scale Laplacian loss
+        lap_loss = 0.0
+        for p, g in zip(pred_pyr, mask_pyr):
+            lap_loss += F.mse_loss(p, g)
+
+        lap_loss /= self.num_levels  # average over pyramid levels
+
+        # Weighted final loss
+        return self.alpha * struct_loss + self.beta * lap_loss
 
 class Conv(nn.Module):
     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)."""
