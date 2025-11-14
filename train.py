@@ -10,7 +10,7 @@ import os
 import glob
 import argparse
 from utils.soap import SOAP
-from utils.loss import structure_loss, create_mask_pyramid, lap_structure_loss
+from utils.loss import structure_loss, lap_structure_loss
 import wandb
 
 def train(start_epoch=0, model_name = "LAFinet"):
