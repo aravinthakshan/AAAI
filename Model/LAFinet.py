@@ -289,7 +289,7 @@ class LaplacianFINet(nn.Module):
         #out4 = self.rcca_out4(out4) # assuming num_classes=1 for binary segmentation
 
         fused = self.ssff([x1, x2, x3])
-        #fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
 
         out4 = self.asf4([out4, fused])
 
