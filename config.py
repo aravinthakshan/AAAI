@@ -4,8 +4,8 @@ import torch
 
 class Config:
     def __init__(self):
-        # dataset_dir = '/kaggle/input/camodata'
-        dataset_dir = "/root/.cache/kagglehub/datasets/aravinthakshanas/camodata/versions/1" # for colab env
+        dataset_dir = '/kaggle/input/camodata'
+        #dataset_dir = "/root/.cache/kagglehub/datasets/aravinthakshanas/camodata/versions/1" # for colab env
         self.dp = DataPath(dataset_dir)
         self.num_workers = 4 # changed this for kaggle
 
