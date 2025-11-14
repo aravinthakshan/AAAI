@@ -131,8 +131,8 @@ if __name__ == '__main__':
     #WANDB
 
     try:
-        from kaggle_secrets import UserSecretsClient
-        user_secrets = UserSecretsClient()
+        # from kaggle_secrets import UserSecretsClient
+        # user_secrets = UserSecretsClient()
         wandb_api_key = "4cdb0327752ba297aeb4f82dcc902d5f2e1d5eae"
         wandb.login(key=wandb_api_key)
         print("Logged into wandb successfully.")
