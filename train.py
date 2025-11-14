@@ -50,7 +50,13 @@ def train(start_epoch=0, model_name = "LAFinet"):
                 loss3 = MultiScaleLapLoss(out3, mask_pyramid[2])
                 loss4 = MultiScaleLapLoss(out4, mask_pyramid[3])
 
-                loss = 1.0 * loss1 + 0.8 * loss2 + 0.6 * loss3 + 0.4 * loss4
+                loss = (
+                    1.0 * loss1 +
+                    0.8 * loss2 +
+                    0.6 * loss3 +
+                    0.4 * loss4
+                )
+
 
             loss.backward()
             optimizer.step()
