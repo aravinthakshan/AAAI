@@ -30,6 +30,7 @@ def train(start_epoch=0, model_name = "LAFinet"):
             low = low.to(cfg.device)
 
             out1, out2, out3, out4 = model(img, high, low)
+            criterion = MultiScaleLapLoss().to(cfg.device)
 
             if model_name == "FINet":
                 loss1 = structure_loss(out1, mask)
@@ -45,18 +46,11 @@ def train(start_epoch=0, model_name = "LAFinet"):
                 out4.shape[2:]   # out4 shape
                 ]
                 mask_pyramid = create_mask_pyramid(mask, output_shapes)
-                loss1 = MultiScaleLapLoss(out1, mask_pyramid[0])
-                loss2 = MultiScaleLapLoss(out2, mask_pyramid[1])
-                loss3 = MultiScaleLapLoss(out3, mask_pyramid[2])
-                loss4 = MultiScaleLapLoss(out4, mask_pyramid[3])
-
-                loss = (
-                    1.0 * loss1 +
-                    0.8 * loss2 +
-                    0.6 * loss3 +
-                    0.4 * loss4
-                )
-
+                loss1 = criterion(out1, mask_pyramid[0])
+                loss2 = criterion(out2, mask_pyramid[1])
+                loss3 = criterion(out3, mask_pyramid[2])
+                #loss4 = criterion(out4, mask_pyramid[3])
+                loss = 0.8*loss1 + 0.6*loss2 + 0.4*loss3 
 
             loss.backward()
             optimizer.step()
