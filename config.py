@@ -12,7 +12,7 @@ class Config:
         self.CUDA = True
         self.device = torch.device('cuda' if self.CUDA else 'cpu')
 
-        self.epochs = 200 # changed this for testing WandB
+        self.epochs = 3 # changed this for testing WandB
         self.trainsize = 384
         self.batch_size = 16
         self.weight_decay = 4e-8
