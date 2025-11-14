@@ -152,7 +152,7 @@ class TrainDataset(Dataset):
         return high, low
 
     def __len__(self):
-        # return 100
+        #return 10
         return self.size
 
 
@@ -193,7 +193,7 @@ class TestDataset(Dataset):
         self.freq_norm = transforms.Normalize(mean=freq_stats['mean'], std=freq_stats['std'])
 
     def __len__(self):
-        # return 100
+        #return 10
         return len(self.images)
 
     def __getitem__(self, index):

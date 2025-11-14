@@ -30,27 +30,29 @@ def train(start_epoch=0, model_name = "LAFinet"):
 
             out1, out2, out3, out4 = model(img, high, low)
 
-            if model_name == "FINet":
+            #if model_name == "FINet":
+            # has structure loss 
+            # loss1 = structure_loss(out1, mask)
+            # loss2 = structure_loss(out2, mask)
+            # loss3 = structure_loss(out3, mask)
+            # loss4 = structure_loss(out4, mask)
+            # loss = loss1 + loss2 + loss3 + loss4
+            # else:
 
-                loss1 = structure_loss(out1, mask)
-                loss2 = structure_loss(out2, mask)
-                loss3 = structure_loss(out3, mask)
-                loss4 = structure_loss(out4, mask)
-                loss = loss1 + loss2 + loss3 + loss4
-            else:
-                output_shapes = [
+            # has multi scale lap loss
+            output_shapes = [
                 out1.shape[2:],  # out1 shape
                 out2.shape[2:],  # out2 shape  
                 out3.shape[2:],  # out3 shape
                 out4.shape[2:]   # out4 shape
-                ]
-                mask_pyramid = create_mask_pyramid(mask, output_shapes)
-                loss1 = lap_structure_loss(out1, mask_pyramid[0])
-                loss2 = lap_structure_loss(out2, mask_pyramid[1])
-                loss3 = lap_structure_loss(out3, mask_pyramid[2])
-                loss4 = lap_structure_loss(out4, mask_pyramid[3])
+            ]
+            mask_pyramid = create_mask_pyramid(mask, output_shapes)
+            loss1 = lap_structure_loss(out1, mask_pyramid[0])
+            loss2 = lap_structure_loss(out2, mask_pyramid[1])
+            loss3 = lap_structure_loss(out3, mask_pyramid[2])
+            loss4 = lap_structure_loss(out4, mask_pyramid[3])
 
-                loss = 1.0 * loss1 + 0.8 * loss2 + 0.6 * loss3 + 0.4 * loss4
+            loss = 1.0 * loss1 + 0.8 * loss2 + 0.6 * loss3 + 0.4 * loss4
 
             loss.backward()
             optimizer.step()
@@ -100,7 +102,7 @@ if __name__ == '__main__':
     parser.add_argument('--backbone', type=str, default='efficientb0',
                         choices=['efficientb0', 'tinynet-a'],
                         help='Backbone network for FINet')
-    parser.add_argument('--optimizer', type=str, default='adam',
+    parser.add_argument('--optimizer', type=str, default='soap',
                         choices=['adam', 'sgd','soap'],
                         help='Optimizer type')
     parser.add_argument('--scheduler', type=str, default='cosine',
@@ -129,8 +131,8 @@ if __name__ == '__main__':
     #WANDB
 
     try:
-        from kaggle_secrets import UserSecretsClient
-        user_secrets = UserSecretsClient()
+        # from kaggle_secrets import UserSecretsClient
+        # user_secrets = UserSecretsClient()
         wandb_api_key = "4cdb0327752ba297aeb4f82dcc902d5f2e1d5eae"
         wandb.login(key=wandb_api_key)
         print("Logged into wandb successfully.")
@@ -155,8 +157,6 @@ if __name__ == '__main__':
     print(f"Started W&B run with ID: {wandb.run.id}")
     with open("wandb_run_id.txt", "w") as f:
         f.write(wandb.run.id)
-
-
 
     # ---- Model ----
     from Model.FINet import FINet
@@ -201,7 +201,7 @@ if __name__ == '__main__':
 
     # ---- Resume from checkpoint ----
     os.makedirs(args.save_dir, exist_ok=True)
-    checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "FINet_epoch*.pth")))
+    checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "LAFINet*.pth")))
 
     start_epoch = 0
     if checkpoints and args.trial == True:
@@ -210,6 +210,15 @@ if __name__ == '__main__':
         print(f"Resuming training from checkpoint {latest_ckpt}...")
         ckpt = torch.load(latest_ckpt, map_location=cfg.device)
         model.load_state_dict(ckpt['model'])
+        optimizer.load_state_dict(ckpt['optimizer'])
+        scheduler.load_state_dict(ckpt['scheduler'])
+        start_epoch = ckpt['epoch']
+        print(f"Checkpoint loaded. Resuming from epoch {start_epoch}")
+    elif args.ckpt:
+        latest_ckpt = args.ckpt
+        print(f"Resuming training from checkpoint {latest_ckpt}...")
+        ckpt = torch.load(latest_ckpt, map_location=cfg.device)
+        model.load_state_dict(ckpt['model'], strict=False)
         optimizer.load_state_dict(ckpt['optimizer'])
         scheduler.load_state_dict(ckpt['scheduler'])
         start_epoch = ckpt['epoch']

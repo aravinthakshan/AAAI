@@ -17,12 +17,14 @@ class LaplacianPyramid(nn.Module):
         self.register_buffer('gaussian_kernel', self._get_gaussian_kernel())
         
     def _get_gaussian_kernel(self):
-        """Create a 3x3 Gaussian kernel for 3-level pyramid"""
+        """Create a 5x5 Gaussian kernel"""
         kernel = torch.tensor([
-            [1, 2, 1],
-            [2, 4, 2],
-            [1, 2, 1]
-        ], dtype=torch.float32) / 16.0
+            [1, 4, 6, 4, 1],
+            [4, 16, 24, 16, 4],
+            [6, 24, 36, 24, 6],
+            [4, 16, 24, 16, 4],
+            [1, 4, 6, 4, 1]
+        ], dtype=torch.float32) / 256.0
         
         # Expand for 3 channels (RGB)
         kernel = kernel.unsqueeze(0).unsqueeze(0).repeat(3, 1, 1, 1)
@@ -499,3 +501,139 @@ def lap_structure_loss(logits, mask, alpha=0.7, beta=0.3):
     edge_loss = F.mse_loss(pred_edges, mask_edges)
     
     return alpha * struct_loss + beta * edge_loss
+
+class Conv(nn.Module):
+    """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)."""
+
+    default_act = nn.SiLU()  # default activation
+
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
+        """Initialize Conv layer with given arguments including activation."""
+        super().__init__()
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+    def forward(self, x):
+        """Apply convolution, batch normalization and activation to input tensor."""
+        return self.act(self.bn(self.conv(x)))
+
+    def forward_fuse(self, x):
+        """Perform transposed convolution of 2D data."""
+        return self.act(self.conv(x))
+ 
+def get_shape(tensor):
+    shape = tensor.shape
+    if torch.onnx.is_in_onnx_export():
+        shape = [i.cpu().numpy() for i in shape]
+    return shape
+
+def autopad(k, p=None, d=1):  # kernel, padding, dilation
+    """Pad to 'same' shape outputs."""
+    if d > 1:
+        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
+    if p is None:
+        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
+    return p
+   
+class GOLDYOLO_Attention(torch.nn.Module):
+    def __init__(self, dim, key_dim = 2, num_heads = 2, attn_ratio=4):
+        super().__init__()
+        self.num_heads = num_heads
+        self.scale = key_dim ** -0.5
+        self.key_dim = key_dim
+        self.nh_kd = nh_kd = key_dim * num_heads  # num_head key_dim
+        self.d = int(attn_ratio * key_dim)
+        self.dh = int(attn_ratio * key_dim) * num_heads
+        self.attn_ratio = attn_ratio
+        
+        self.to_q = Conv(dim, nh_kd, 1, act=False)
+        self.to_k = Conv(dim, nh_kd, 1, act=False)
+        self.to_v = Conv(dim, self.dh, 1, act=False)
+        
+        self.proj = torch.nn.Sequential(nn.ReLU6(), Conv(self.dh, dim, act=False))
+    
+    def forward(self, x):  # x (B,N,C)
+        B, C, H, W = get_shape(x)
+        
+        qq = self.to_q(x).reshape(B, self.num_heads, self.key_dim, H * W).permute(0, 1, 3, 2)
+        kk = self.to_k(x).reshape(B, self.num_heads, self.key_dim, H * W)
+        vv = self.to_v(x).reshape(B, self.num_heads, self.d, H * W).permute(0, 1, 3, 2)
+        
+        attn = torch.matmul(qq, kk)
+        attn = attn.softmax(dim=-1)  # dim = k
+        
+        xx = torch.matmul(attn, vv)
+        
+        xx = xx.permute(0, 1, 3, 2).reshape(B, self.dh, H, W)
+        xx = self.proj(xx)
+        return xx
+
+class Mlp(nn.Module):
+    def __init__(self, in_features, hidden_features=None, out_features=None, drop=0.):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = Conv(in_features, hidden_features, act=False)
+        self.dwconv = nn.Conv2d(hidden_features, hidden_features, 3, 1, 1, bias=True, groups=hidden_features)
+        self.act = nn.ReLU6()
+        self.fc2 = Conv(hidden_features, out_features, act=False)
+        self.drop = nn.Dropout(drop)
+    
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.dwconv(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x
+
+def drop_path(x, drop_prob: float = 0., training: bool = False):
+    """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
+    This is the same as the DropConnect impl I created for EfficientNet, etc networks, however,
+    the original name is misleading as 'Drop Connect' is a different form of dropout in a separate paper...
+    See discussion: https://github.com/tensorflow/tpu/issues/494#issuecomment-532968956 ... I've opted for
+    changing the layer and argument names to 'drop path' rather than mix DropConnect as a layer name and use
+    'survival rate' as the argument.
+    """
+    if drop_prob == 0. or not training:
+        return x
+    keep_prob = 1 - drop_prob
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
+    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+    random_tensor.floor_()  # binarize
+    output = x.div(keep_prob) * random_tensor
+    return output
+
+class DropPath(nn.Module):
+    """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
+    """
+    
+    def __init__(self, drop_prob=None):
+        super(DropPath, self).__init__()
+        self.drop_prob = drop_prob
+    
+    def forward(self, x):
+        return drop_path(x, self.drop_prob, self.training)
+    
+class top_Block(nn.Module):
+    
+    def __init__(self, dim, key_dim = 4, num_heads =2, mlp_ratio=4., attn_ratio=2., drop=0.,
+                 drop_path=0.):
+        super().__init__()
+        self.dim = dim
+        self.num_heads = num_heads
+        self.mlp_ratio = mlp_ratio
+        
+        self.attn = GOLDYOLO_Attention(dim, key_dim=key_dim, num_heads=num_heads, attn_ratio=attn_ratio)
+        
+        # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, drop=drop)
+    
+    def forward(self, x1):
+        x1 = x1 + self.drop_path(self.attn(x1))
+        x1 = x1 + self.drop_path(self.mlp(x1))
+        return x1

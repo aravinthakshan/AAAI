@@ -4,7 +4,8 @@ import torch
 
 class Config:
     def __init__(self):
-        dataset_dir = '/kaggle/input/camodata'
+        # dataset_dir = '/kaggle/input/camodata'
+        dataset_dir = "/root/.cache/kagglehub/datasets/aravinthakshanas/camodata/versions/1" # for colab env
         self.dp = DataPath(dataset_dir)
         self.num_workers = 4 # changed this for kaggle
 
@@ -13,7 +14,7 @@ class Config:
 
         self.epochs = 200 # changed this for testing WandB
         self.trainsize = 384
-        self.batch_size = 32
+        self.batch_size = 16
         self.weight_decay = 4e-8
         self.learning_rate = 2.6e-4
         self.min_lr = 1e-7

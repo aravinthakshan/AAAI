@@ -43,7 +43,6 @@ if __name__ == '__main__':
     cfg = Config()
     datasets = ['CHAMELEON', 'CAMO', 'COD10K', 'NC4K']
     
-    # ✅ 1. Create a list to hold all results
     all_results = []
 
     for dataset in datasets:
@@ -62,7 +61,6 @@ if __name__ == '__main__':
             if key != 'dataset':
                 print(f"{key}: {value}")
 
-    # ✅ 2. Create and log the summary table from all results
     if all_results:
         # Create a pandas DataFrame from the list of dictionaries
         df = pd.DataFrame(all_results)
@@ -76,7 +74,6 @@ if __name__ == '__main__':
         
         wandb.log({"Evaluation_Summary": results_table})
 
-    # ✅ 3. (Optional but recommended) Log average metrics to the run's summary
     if all_results:
         avg_metrics = df.drop(columns=['dataset']).mean().to_dict()
         wandb.summary.update({f"avg_{key}": value for key, value in avg_metrics.items()})

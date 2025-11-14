@@ -11,6 +11,8 @@ from config import Config
 from utils.dataloader_freq import TestDataset
 from utils.metrics import EvaluationMetrics
 from Model.LAFinet import LaplacianFINet
+from utils.dct import dct_2d
+import pickle
 
 def inference(datasets, save_dir="prediction_maps"):
     global model, cfg
@@ -63,7 +65,7 @@ def evaluate(pred_path, dataset):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="FINet Inference + Evaluation Script")
-    parser.add_argument('--ckpt', type=str, default=None,
+    parser.add_argument('--ckpt', type=str, default="/kaggle/input/lafinet-ffm-asf/LAFINet_ASF_epoch200.pth",
                         help="Path to a specific checkpoint. If not provided, loads the latest one.")
     parser.add_argument('--datasets', type=str, nargs='+',
                         default=['CHAMELEON', 'CAMO', 'COD10K', 'NC4K'],
