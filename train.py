@@ -10,8 +10,7 @@ import os
 import glob
 import argparse
 from utils.soap import SOAP
-from utils.loss import structure_loss, create_mask_pyramid
-from Model.lap_utils import MultiScaleLapLoss
+from utils.loss import structure_loss, create_mask_pyramid, lap_structure_loss
 import wandb
 
 def train(start_epoch=0, model_name = "LAFinet"):
@@ -30,7 +29,6 @@ def train(start_epoch=0, model_name = "LAFinet"):
             low = low.to(cfg.device)
 
             out1, out2, out3, out4 = model(img, high, low)
-            criterion = MultiScaleLapLoss().to(cfg.device)
 
             if model_name == "FINet":
                 loss1 = structure_loss(out1, mask)
@@ -39,18 +37,11 @@ def train(start_epoch=0, model_name = "LAFinet"):
                 loss4 = structure_loss(out4, mask)
                 loss = loss1 + loss2 + loss3 + loss4
             else:
-                output_shapes = [
-                out1.shape[2:],  # out1 shape
-                out2.shape[2:],  # out2 shape  
-                out3.shape[2:],  # out3 shape
-                out4.shape[2:]   # out4 shape
-                ]
-                mask_pyramid = create_mask_pyramid(mask, output_shapes)
-                loss1 = criterion(out1, mask_pyramid[0])
-                loss2 = criterion(out2, mask_pyramid[1])
-                loss3 = criterion(out3, mask_pyramid[2])
-                #loss4 = criterion(out4, mask_pyramid[3])
-                loss = 0.8*loss1 + 0.6*loss2 + 0.4*loss3 
+                loss1 = lap_structure_loss(out1, mask)
+                loss2 = lap_structure_loss(out2, mask)
+                loss3 = lap_structure_loss(out3, mask)
+                loss4 = lap_structure_loss(out4, mask)
+                loss = loss1 + loss2 + loss3 + loss4
 
             loss.backward()
             optimizer.step()

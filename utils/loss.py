@@ -16,32 +16,49 @@ def structure_loss(logits, mask):
     wiou = 1 - (inter + 1) / (union - inter + 1)
     return (wbce + wiou).mean()
 
-def create_mask_pyramid(mask, output_shapes):
-    mask_pyramid = []
-    
-    for shape in output_shapes:
-        h, w = shape
-        resized_mask = F.interpolate(mask, size=(h, w), mode='bilinear', align_corners=False)
-        mask_pyramid.append(resized_mask)
-    
-    return mask_pyramid
+def laplacian_pyramid(img, levels=3):
+    pyr = []
+    current = img
+
+    for _ in range(levels):
+        # Gaussian downsample
+        down = F.interpolate(current, scale_factor=0.5, mode='bilinear', align_corners=False)
+
+        # Upsample back to original size
+        up = F.interpolate(down, size=current.shape[2:], mode='bilinear', align_corners=False)
+
+        # Laplacian = current - upsampled(gaussian_down)
+        lap = current - up
+        pyr.append(lap)
+
+        # Move to next level
+        current = down
+
+    return pyr
 
 
-def lap_structure_loss(logits, mask, alpha=0.7, beta=0.3):
+def lap_structure_loss(logits, mask, alpha=0.7, beta=0.3, levels=3):
+    # Resize GT mask if necessary
     if mask.shape[2:] != logits.shape[2:]:
         mask = F.interpolate(mask, size=logits.shape[2:], mode='bilinear', align_corners=False)
-    
+
+    # Base structural loss
     struct_loss = structure_loss(logits, mask)
-    
-    laplacian_kernel = torch.tensor([[[[-1, -1, -1],
-                                      [-1,  8, -1],
-                                      [-1, -1, -1]]]], dtype=torch.float32).to(logits.device)
-    
+
+    # Sigmoid for prediction map
     pred = torch.sigmoid(logits)
-    
-    pred_edges = F.conv2d(pred, laplacian_kernel, padding=1)
-    mask_edges = F.conv2d(mask, laplacian_kernel, padding=1)
-    
-    edge_loss = F.mse_loss(pred_edges, mask_edges)
-    
-    return alpha * struct_loss + beta * edge_loss
+
+    # Build Laplacian pyramids for pred & mask
+    pred_pyr = laplacian_pyramid(pred, levels)
+    mask_pyr = laplacian_pyramid(mask, levels)
+
+    # Multi-scale MSE across each level
+    lap_loss = 0.0
+    for p, m in zip(pred_pyr, mask_pyr):
+        lap_loss += F.mse_loss(p, m)
+
+    # Average over levels
+    lap_loss /= levels
+
+    # Combine
+    return alpha * struct_loss + beta * lap_loss
