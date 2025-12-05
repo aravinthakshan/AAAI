@@ -10,12 +10,15 @@ import os
 import glob
 import argparse
 from utils.soap import SOAP
-from utils.loss import structure_loss, lap_structure_loss
+from utils.loss import structure_loss, lap_structure_loss, LapLoss
 import wandb
+from Model.lap_utils import LaplacianPyramid
 
 def train(start_epoch=0, model_name = "LAFinet"):
     global model, train_datald, optimizer, cfg, scheduler
     print(f"Starting training {model_name}...")
+    lap_pyr_module = LaplacianPyramid(max_levels=3).to(cfg.device)
+    laploss_module = LapLoss(lap_pyr_module=lap_pyr_module).to(cfg.device)
     for epoch in range(start_epoch, cfg.epochs):
         model.train()
 
@@ -37,11 +40,21 @@ def train(start_epoch=0, model_name = "LAFinet"):
                 loss4 = structure_loss(out4, mask)
                 loss = loss1 + loss2 + loss3 + loss4
             else:
-                loss1 = lap_structure_loss(out1, mask)
-                loss2 = lap_structure_loss(out2, mask)
-                loss3 = lap_structure_loss(out3, mask)
-                loss4 = lap_structure_loss(out4, mask)
-                loss = loss1 + loss2 + loss3 + loss4
+                #loss1 = lap_structure_loss(out1, mask)
+                #loss2 = lap_structure_loss(out2, mask)
+                #loss3 = lap_structure_loss(out3, mask)
+                #loss4 = lap_structure_loss(out4, mask)
+                #loss = loss1 + loss2 + loss3 + loss4
+                loss1 = structure_loss(out1, mask)
+                loss2 = structure_loss(out2, mask)
+                loss3 = structure_loss(out3, mask)
+                loss4 = structure_loss(out4, mask)
+                lap1 = laploss_module(out1.sigmoid(), mask)
+                lap2 = laploss_module(out2.sigmoid(), mask)
+                lap3 = laploss_module(out3.sigmoid(), mask)
+                lap4 = laploss_module(out4.sigmoid(), mask)
+                loss = loss1 + loss2 + loss3 + loss4 + 0.3*(lap1 + lap2 + lap3 + lap4)
+
 
             loss.backward()
             optimizer.step()
