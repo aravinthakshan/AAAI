@@ -9,12 +9,12 @@ class LaplacianPyramid(nn.Module):
     Laplacian Pyramid decomposition module
     Creates multiple frequency bands at different scales
     """
-    def __init__(self, num_levels=3):
+    def __init__(self, num_levels=3,c=3):
         super(LaplacianPyramid, self).__init__()
         self.num_levels = num_levels
         
         # Gaussian kernel for smoothing (3x3 kernel for 3-level pyramid)
-        self.register_buffer('gaussian_kernel', self._get_gaussian_kernel())
+        self.register_buffer('gaussian_kernel', self._get_gaussian_kernel(channels=c))
         
     def _get_gaussian_kernel(self):
         """Create a 5x5 Gaussian kernel"""

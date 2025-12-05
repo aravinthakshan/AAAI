@@ -65,27 +65,20 @@ def lap_structure_loss(logits, mask, alpha=0.7, beta=0.3, levels=3):
     return alpha * struct_loss + beta * lap_loss
 
 class LapLoss(nn.Module):
-    def __init__(self, lap_pyr_module, num_levels=3, lambdas=None, mse_weight=1.0):
-        """
-        Args:
-            lap_pyr_module (nn.Module): Your LaplacianPyramid module.
-            num_levels (int): Number of pyramid levels.
-            lambdas (list): Weight per level, e.g., [1/3, 1/3, 1/3].
-            mse_weight (float): Scalar to scale MSE loss at each level.
-        """
+    def __init__(self, lap_pyr, levels=3, lambdas=None):
         super().__init__()
-        self.lap_pyr = lap_pyr_module
-        self.num_levels = num_levels
-        self.lambdas = lambdas or [1.0 / num_levels] * num_levels
-        self.mse_weight = mse_weight
+        self.lap_pyr = lap_pyr
+        self.levels = levels
         self.mse = nn.MSELoss()
+        self.lambdas = lambdas or [1/levels] * levels
 
     def forward(self, pred, target):
         pred_pyr = self.lap_pyr(pred)
         target_pyr = self.lap_pyr(target)
 
-        loss = 0.0
-        for i in range(self.num_levels):
-            loss += self.lambdas[i] * self.mse_weight * self.mse(pred_pyr[i], target_pyr[i])
+        loss = 0
+        for i in range(self.levels):
+            loss += self.lambdas[i] * self.mse(pred_pyr[i], target_pyr[i])
         return loss
+
 
