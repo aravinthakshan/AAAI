@@ -7,76 +7,75 @@ import math
 class LaplacianPyramid(nn.Module):
     """
     Laplacian Pyramid decomposition module
-    Creates multiple frequency bands at different scales
+    Creates multiple frequency bands at different scales.
+    Works for ANY number of channels (auto-detected).
+    Perfect for LapLoss in segmentation.
     """
-    def __init__(self, num_levels=3,c=3):
+    def __init__(self, num_levels=3):
         super(LaplacianPyramid, self).__init__()
         self.num_levels = num_levels
-        
-        # Gaussian kernel for smoothing (3x3 kernel for 3-level pyramid)
-        self.register_buffer('gaussian_kernel', self._get_gaussian_kernel(channels=c))
-        
-    def _get_gaussian_kernel(self):
-        """Create a 5x5 Gaussian kernel"""
-        kernel = torch.tensor([
+
+        # Register gaussian kernel (5x5) — initialized for 1 channel,
+        # but repeated for correct num_channels at runtime.
+        self.register_buffer("base_kernel", self._make_kernel())
+
+    def _make_kernel(self):
+        """Return 5×5 Gaussian kernel (base, before channel expansion)."""
+        g = torch.tensor([
             [1, 4, 6, 4, 1],
             [4, 16, 24, 16, 4],
             [6, 24, 36, 24, 6],
             [4, 16, 24, 16, 4],
             [1, 4, 6, 4, 1]
         ], dtype=torch.float32) / 256.0
-        
-        # Expand for 3 channels (RGB)
-        kernel = kernel.unsqueeze(0).unsqueeze(0).repeat(3, 1, 1, 1)
-        return kernel
-    
+
+        g = g.unsqueeze(0).unsqueeze(0)  # shape [1,1,5,5]
+        return g  # expand later to correct channels
+
     def _gaussian_blur(self, x):
-        """Apply Gaussian blur to input image"""
-        # Apply convolution with Gaussian kernel for each channel separately
-        return F.conv2d(x, self.gaussian_kernel, padding=1, groups=3)
-    
+        """
+        Apply Gaussian blur with appropriate number of channels.
+        Automatically expands 5x5 kernel to match x's channels.
+        """
+        C = x.shape[1]
+        kernel = self.base_kernel.repeat(C, 1, 1, 1)  # [C,1,5,5]
+        return F.conv2d(x, kernel, padding=2, groups=C)
+
     def _downsample(self, x):
-        """Downsample by factor of 2"""
+        """Downsample by factor 2."""
         return F.interpolate(x, scale_factor=0.5, mode='bilinear', align_corners=False)
-    
+
     def _upsample(self, x, target_size):
-        """Upsample to target size"""
+        """Upsample to match the previous Gaussian level."""
         return F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
-    
+
     def forward(self, x):
         """
-        Create Laplacian pyramid from input image
-        Returns: List of Laplacian levels [L0, L1, L2] for 3-level pyramid
-        L0 is the finest level, L2 is the coarsest
+        Returns Laplacian pyramid:
+            [L0, L1, ..., L(n-2), Gaussian_last]
+        Where L0 is highest-resolution detail.
         """
-        pyramid_levels = []
-        gaussian_pyramid = []
-        
+        gaussian_pyr = []
         current = x
-        
+
         # Build Gaussian pyramid
         for i in range(self.num_levels):
-            if i == 0:
-                gaussian_pyramid.append(current)
-            else:
-                # Blur and downsample
+            gaussian_pyr.append(current)
+            if i != self.num_levels - 1:
                 blurred = self._gaussian_blur(current)
-                downsampled = self._downsample(blurred)
-                gaussian_pyramid.append(downsampled)
-                current = downsampled
-        
+                current = self._downsample(blurred)
+
         # Build Laplacian pyramid
+        laplacian_pyr = []
         for i in range(self.num_levels - 1):
-            # Upsample the next level
-            upsampled = self._upsample(gaussian_pyramid[i + 1], gaussian_pyramid[i].shape[2:])
-            # Laplacian = current level - upsampled next level
-            laplacian = gaussian_pyramid[i] - upsampled
-            pyramid_levels.append(laplacian)
-        
-        # The last level is just the smallest Gaussian level
-        pyramid_levels.append(gaussian_pyramid[-1])
-        
-        return pyramid_levels
+            up = self._upsample(gaussian_pyr[i + 1], gaussian_pyr[i].shape[2:])
+            lap = gaussian_pyr[i] - up
+            laplacian_pyr.append(lap)
+
+        # Final low-frequency Gaussian level
+        laplacian_pyr.append(gaussian_pyr[-1])
+
+        return laplacian_pyr
 
 
 class LaplacianInjectionBlock(nn.Module):

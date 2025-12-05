@@ -17,7 +17,7 @@ from Model.lap_utils import LaplacianPyramid
 def train(start_epoch=0, model_name = "LAFinet"):
     global model, train_datald, optimizer, cfg, scheduler
     print(f"Starting training {model_name}...")
-    lap_pyr_module = LaplacianPyramid(num_levels=3,c=1).to(cfg.device)
+    lap_pyr_module = LaplacianPyramid(num_levels=3).to(cfg.device)
     laploss_module = LapLoss(lap_pyr_module=lap_pyr_module).to(cfg.device)
     for epoch in range(start_epoch, cfg.epochs):
         model.train()
