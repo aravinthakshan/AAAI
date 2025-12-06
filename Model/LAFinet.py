@@ -8,67 +8,97 @@ from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock, LDConv, a
 from Model.Replacements import FSM_FFM
 from Model.ccnet import RCCAModule  
 
+class LapFusion(nn.Module):
+    """
+    Learnable 3-branch Laplacian fusion with channel + spatial attention.
+    Replaces naive low + mid + top sum.
+    """
+    def __init__(self, channels):
+        super().__init__()
+
+        # lightweight attention: produces 3 attention maps (per pixel)
+        self.att = nn.Sequential(
+            nn.Conv2d(channels * 3, channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(channels, 3, kernel_size=1, bias=False),  # 3 branch weights
+            nn.Softmax(dim=1)  # normalize across branches
+        )
+
+    def forward(self, low, mid, top):
+        # concat spatially
+        x = torch.cat([low, mid, top], dim=1)
+
+        # attention maps shape: [B, 3, H, W]
+        w = self.att(x)
+
+        # split weights
+        w1, w2, w3 = w[:, 0:1], w[:, 1:2], w[:, 2:3]
+
+        # weighted fusion
+        out = w1 * low + w2 * mid + w3 * top
+        return out
+
+
 class Decoder(nn.Module):
-    """Lap decoder with Low, Middle, and Top branches"""
     def __init__(self, in_channels, out_channels):
         super(Decoder, self).__init__()
-        
-        # Low Branch - generates primary segmentation mask
+
+        # Low branch:
         self.low_branch = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, in_channels, 3, padding=1),
             nn.InstanceNorm2d(in_channels),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.InstanceNorm2d(out_channels),
-            nn.LeakyReLU(0.2, inplace=True)
+            nn.Conv2d(in_channels, out_channels, 3, padding=1),
         )
-        
-        # Middle Branch - reconstructs high-resolution residuals
+
+        # Middle branch:
         self.middle_branch = nn.ModuleList([
-            self._make_residual_block(in_channels) for _ in range(7)
+            nn.Sequential(
+                nn.Conv2d(in_channels, in_channels, 3, padding=1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(in_channels, in_channels, 3, padding=1)
+            )
+            for _ in range(4)
         ])
-        
-        # Top Branch - final refinement
+
+        # Top branch:
         self.top_branch = nn.ModuleList([
-            self._make_residual_block(in_channels) for _ in range(2)
+            nn.Sequential(
+                nn.Conv2d(in_channels, in_channels, 3, padding=1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(in_channels, in_channels, 3, padding=1)
+            )
+            for _ in range(2)
         ])
-        
-        # Final convolution for upsampling
-        self.final_conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        
-    def _make_residual_block(self, channels):
-        """Create a residual block with LeakyReLU between conv layers"""
-        return nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        )
-    
+
+        # Final lap outputs
+        self.final_mid = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+        self.final_top = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+
+        self.fusion = LapFusion(out_channels)
+
     def forward(self, x):
-        """
-        Forward pass through LAqua decoder
-        Returns: (low_out, middle_out, top_out)
-        """
-        # Low Branch - primary segmentation
-        low_out = self.low_branch(x)
-        
-        # Middle Branch - residual reconstruction
-        middle_x = x
+        # Low
+        low = self.low_branch(x)
+
+        # Middle residual stack
+        mid = x
         for block in self.middle_branch:
-            residual = block(middle_x)
-            middle_x = middle_x + F.leaky_relu(residual, 0.2)
-        
-        # Top Branch - final refinement
-        top_x = middle_x
+            mid = mid + F.leaky_relu(block(mid), 0.2)
+        mid_out = self.final_mid(mid)
+
+        # Top residual stack
+        top = mid
         for block in self.top_branch:
-            residual = block(top_x)
-            top_x = top_x + F.leaky_relu(residual, 0.2)
-        
-        # Final outputs
-        middle_out = self.final_conv(middle_x)
-        top_out = self.final_conv(top_x)
-        
-        return low_out, middle_out, top_out
+            top = top + F.leaky_relu(block(top), 0.2)
+        top_out = self.final_top(top)
+
+        out = self.fusion(low, mid_out, top_out)
+
+        return out
+
 
 class DeBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -89,10 +119,10 @@ class DeBlock(nn.Module):
         x = self.conv1(x) + self.conv2(x) + self.conv3(x)
         x = self.bn(x)
         # Apply LAP decoder
-        low_out, middle_out, top_out = self.lap_decoder(x)
+        out  = self.lap_decoder(x)
         # Combine all branches (hierarchical upsampling)
-        combined = low_out + middle_out + top_out
-        return combined
+        #combined = low_out + middle_out + top_out
+        return out
 
 class LFA(nn.Module):
     """Low Frequency Injection Module (unchanged from original)"""
