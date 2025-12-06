@@ -17,8 +17,7 @@ from Model.lap_utils import LaplacianPyramid
 def train(start_epoch=0, model_name = "LAFinet"):
     global model, train_datald, optimizer, cfg, scheduler
     print(f"Starting training {model_name}...")
-    lap_pyr_module = LaplacianPyramid(num_levels=3).to(cfg.device)
-    laploss_module = LapLoss(lap_pyr =lap_pyr_module).to(cfg.device)
+    laploss = LapLoss(levels = 3,alpha = 0.7,beta = 0.3)
     for epoch in range(start_epoch, cfg.epochs):
         model.train()
 
@@ -45,15 +44,13 @@ def train(start_epoch=0, model_name = "LAFinet"):
                 #loss3 = lap_structure_loss(out3, mask)
                 #loss4 = lap_structure_loss(out4, mask)
                 #loss = loss1 + loss2 + loss3 + loss4
-                loss1 = structure_loss(out1, mask)
-                loss2 = structure_loss(out2, mask)
-                loss3 = structure_loss(out3, mask)
-                loss4 = structure_loss(out4, mask)
-                lap1 = laploss_module(out1.sigmoid(), mask)
-                lap2 = laploss_module(out2.sigmoid(), mask)
-                lap3 = laploss_module(out3.sigmoid(), mask)
-                lap4 = laploss_module(out4.sigmoid(), mask)
-                loss = loss1 + loss2 + loss3 + loss4 + 0.3*(lap1 + lap2 + lap3 + lap4)
+                loss1 = laploss(out1, mask)
+                loss2 = laploss(out2, mask)
+                loss3 = laploss(out3, mask)
+                loss4 = laploss(out4, mask)
+
+                loss = loss1 + loss2 + loss3 + loss4
+
 
 
             loss.backward()
