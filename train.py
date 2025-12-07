@@ -39,15 +39,14 @@ def train(start_epoch=0, model_name = "LAFinet"):
                 loss4 = structure_loss(out4, mask)
                 loss = loss1 + loss2 + loss3 + loss4
             else:
-                #loss1 = lap_structure_loss(out1, mask)
-                #loss2 = lap_structure_loss(out2, mask)
-                #loss3 = lap_structure_loss(out3, mask)
-                #loss4 = lap_structure_loss(out4, mask)
-                #loss = loss1 + loss2 + loss3 + loss4
-                loss1 = laploss(out1, mask)
-                loss2 = laploss(out2, mask)
-                loss3 = laploss(out3, mask)
-                loss4 = laploss(out4, mask)
+                loss1 = lap_structure_loss(out1, mask)
+                loss2 = lap_structure_loss(out2, mask)
+                loss3 = lap_structure_loss(out3, mask)
+                loss4 = lap_structure_loss(out4, mask)
+                #loss1 = laploss(out1, mask)
+                #loss2 = laploss(out2, mask)
+                #loss3 = laploss(out3, mask)
+                #loss4 = laploss(out4, mask)
 
                 loss = loss1 + loss2 + loss3 + loss4
 
