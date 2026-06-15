@@ -6,13 +6,12 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 import torch.nn.functional as F
-from Model.FINet import FINet
 from config import Config
 from utils.dataloader_freq import TestDataset
 from utils.metrics import EvaluationMetrics
-from Model.LAFinet import LaplacianFINet
 from utils.dct import dct_2d
 import pickle
+from Model.model_factory import BACKBONE_CHOICES, MODEL_CHOICES, build_model, normalize_model_name
 
 def inference(datasets, save_dir="prediction_maps"):
     global model, cfg
@@ -32,9 +31,9 @@ def inference(datasets, save_dir="prediction_maps"):
 
         # image, gt, gt_origin, name, high, low
         for img, _, gt, name, high, low in tqdm(test_dataset, desc=f"Inference {dataset}"):
-            img = img.unsqueeze(0).cuda()
-            high = high.unsqueeze(0).cuda()
-            low = low.unsqueeze(0).cuda()
+            img = img.unsqueeze(0).to(cfg.device)
+            high = high.unsqueeze(0).to(cfg.device)
+            low = low.unsqueeze(0).to(cfg.device)
 
             out1 = model(img, high, low)[0]
             out1 = F.interpolate(out1, size=gt.shape[1:], mode='bilinear', align_corners=True)
@@ -74,16 +73,17 @@ if __name__ == '__main__':
                         help="Directory where checkpoints are stored.")
     parser.add_argument('--pred_dir', type=str, default="prediction_maps",
                         help="Directory to save prediction maps.")
-    parser.add_argument('--model', type=str, default='FINet')
+    parser.add_argument('--model', type=str, default='FINet', choices=MODEL_CHOICES)
+    parser.add_argument('--backbone', type=str, default='efficientb0', choices=BACKBONE_CHOICES,
+                        help="Backbone used by the checkpoint.")
     args = parser.parse_args()
 
     # ---- Load Config & Model ----
     cfg = Config()
     
-    model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
-
-    if args.model == 'LAFinet':
-        model = LaplacianFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+    args.model = normalize_model_name(args.model)
+    model = build_model(args.model, backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
+    print(f"Using {args.model} with {args.backbone} backbone.")
     
 
     # ---- Load checkpoint ----

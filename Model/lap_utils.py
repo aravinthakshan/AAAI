@@ -336,14 +336,15 @@ class asf_channel_att(nn.Module):
 class asf_local_att(nn.Module):
     def __init__(self, channel, reduction=16):
         super(asf_local_att, self).__init__()
+        hidden_channel = max(channel // reduction, 1)
         
-        self.conv_1x1 = nn.Conv2d(in_channels=channel, out_channels=channel//reduction, kernel_size=1, stride=1, bias=False)
+        self.conv_1x1 = nn.Conv2d(in_channels=channel, out_channels=hidden_channel, kernel_size=1, stride=1, bias=False)
  
         self.relu   = nn.ReLU()
-        self.bn     = nn.BatchNorm2d(channel//reduction)
+        self.bn     = nn.BatchNorm2d(hidden_channel)
  
-        self.F_h = nn.Conv2d(in_channels=channel//reduction, out_channels=channel, kernel_size=1, stride=1, bias=False)
-        self.F_w = nn.Conv2d(in_channels=channel//reduction, out_channels=channel, kernel_size=1, stride=1, bias=False)
+        self.F_h = nn.Conv2d(in_channels=hidden_channel, out_channels=channel, kernel_size=1, stride=1, bias=False)
+        self.F_w = nn.Conv2d(in_channels=hidden_channel, out_channels=channel, kernel_size=1, stride=1, bias=False)
  
         self.sigmoid_h = nn.Sigmoid()
         self.sigmoid_w = nn.Sigmoid()

@@ -5,6 +5,8 @@ from config import Config
 from utils.metrics import EvaluationMetrics
 import wandb
 import pandas as pd
+import argparse
+from Model.model_factory import BACKBONE_CHOICES, MODEL_CHOICES, normalize_model_name
 
 def evaluate(pred_path, dataset):
     global cfg
@@ -25,6 +27,19 @@ def evaluate(pred_path, dataset):
     return metric_dic
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Evaluate prediction maps.")
+    parser.add_argument('--pred_dir', type=str, default='prediction_maps',
+                        help='Directory containing dataset prediction folders.')
+    parser.add_argument('--datasets', type=str, nargs='+',
+                        default=['CHAMELEON', 'CAMO', 'COD10K', 'NC4K'],
+                        help='Datasets to evaluate.')
+    parser.add_argument('--model', type=str, default='LAFinet', choices=MODEL_CHOICES,
+                        help='Model name to log with evaluation metadata.')
+    parser.add_argument('--backbone', type=str, default='efficientb0', choices=BACKBONE_CHOICES,
+                        help='Backbone name to log with evaluation metadata.')
+    args = parser.parse_args()
+    args.model = normalize_model_name(args.model)
+
     run = None
     try:
         with open("wandb_run_id.txt", "r") as f:
@@ -39,17 +54,17 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"Could not resume W&B run for evaluation. Error: {e}")
 
-    pred_path = 'prediction_maps'
     cfg = Config()
-    datasets = ['CHAMELEON', 'CAMO', 'COD10K', 'NC4K']
+    datasets = args.datasets
     
     all_results = []
 
     for dataset in datasets:
-        metric_dic = evaluate(pred_path, dataset)
+        metric_dic = evaluate(args.pred_dir, dataset)
         
         # Log individual metrics as charts (your original logic)
         wandb_metrics = {f"eval/{dataset}/{key}": value for key, value in metric_dic.items()}
+        wandb_metrics.update({"eval/model": args.model, "eval/backbone": args.backbone})
         wandb.log(wandb_metrics)
         
         # Add dataset name to the dictionary and append to our list

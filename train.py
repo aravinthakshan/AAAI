@@ -13,11 +13,14 @@ from utils.soap import SOAP
 from utils.loss import structure_loss, lap_structure_loss, LapLoss
 import wandb
 from Model.lap_utils import LaplacianPyramid
+from Model.model_factory import BACKBONE_CHOICES, MODEL_CHOICES, build_model, normalize_model_name
 
-def train(start_epoch=0, model_name = "LAFinet"):
-    global model, train_datald, optimizer, cfg, scheduler
+def train(start_epoch=0, model_name="LAFinet"):
+    global model, train_datald, optimizer, cfg, scheduler, args
+    model_name = normalize_model_name(model_name)
     print(f"Starting training {model_name}...")
     laploss = LapLoss(levels = 3,alpha = 0.7,beta = 0.3)
+    save_path = None
     for epoch in range(start_epoch, cfg.epochs):
         model.train()
 
@@ -69,11 +72,10 @@ def train(start_epoch=0, model_name = "LAFinet"):
         scheduler.step()
 
         # Save checkpoints
-        save_dir = "/kaggle/working/models"
-        os.makedirs(save_dir, exist_ok=True)
+        os.makedirs(args.save_dir, exist_ok=True)
 
         if (epoch + 1) % 5 == 0 or epoch == cfg.epochs - 1:
-            save_path = os.path.join(save_dir, f"FINet_epoch{epoch+1}.pth")
+            save_path = os.path.join(args.save_dir, f"{model_name}_{args.backbone}_epoch{epoch+1}.pth")
             torch.save({
                 'epoch': epoch + 1,  # store next epoch
                 'model': model.state_dict(),
@@ -98,8 +100,8 @@ def train(start_epoch=0, model_name = "LAFinet"):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train FINet model with options")
     parser.add_argument('--backbone', type=str, default='efficientb0',
-                        choices=['efficientb0', 'tinynet-a'],
-                        help='Backbone network for FINet')
+                        choices=BACKBONE_CHOICES,
+                        help='Backbone network. StarNet and DemoNet variants are supported by LaFINet.')
     parser.add_argument('--optimizer', type=str, default='soap',
                         choices=['adam', 'sgd','soap'],
                         help='Optimizer type')
@@ -110,7 +112,7 @@ if __name__ == '__main__':
                         help='Directory to save checkpoints')
     parser.add_argument('--ckpt', type=str, default=None,
                         help='Path to a specific checkpoint to resume from')
-    parser.add_argument('--model', type=str, default='FInet',)
+    parser.add_argument('--model', type=str, default='LAFinet', choices=MODEL_CHOICES)
     parser.add_argument('--trial', action='store_true', default= False)
     args = parser.parse_args()
 
@@ -157,12 +159,8 @@ if __name__ == '__main__':
         f.write(wandb.run.id)
 
     # ---- Model ----
-    from Model.FINet import FINet
-    from Model.LAFinet import LaplacianFINet
-    if args.model == "FINet":
-        model = FINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
-    else:
-        model = LaplacianFINet(backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
+    args.model = normalize_model_name(args.model)
+    model = build_model(args.model, backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
 
     print(f"Total parameters for model '{args.model}': {sum(p.numel() for p in model.parameters()):,}")
 
@@ -199,7 +197,7 @@ if __name__ == '__main__':
 
     # ---- Resume from checkpoint ----
     os.makedirs(args.save_dir, exist_ok=True)
-    checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "LAFINet*.pth")))
+    checkpoints = sorted(glob.glob(os.path.join(args.save_dir, f"{args.model}_{args.backbone}_epoch*.pth")))
 
     start_epoch = 0
     if checkpoints and args.trial == True:

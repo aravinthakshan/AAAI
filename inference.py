@@ -4,12 +4,12 @@ import numpy as np
 from tqdm import tqdm
 import torch.nn.functional as F
 import cv2
-from Model.FINet import FINet
 from config import Config
 from utils.dataloader_freq import TestDataset
 import argparse
 import wandb
 import glob
+from Model.model_factory import BACKBONE_CHOICES, MODEL_CHOICES, build_model, normalize_model_name
 
 NUM_IMAGES_TO_LOG = 5
 
@@ -30,9 +30,9 @@ def inference(datasets):
         log_count = 0
 
         for img_tensor, _, gt_tensor, name, high, low in tqdm(test_dataset, desc=f"Inferring on {dataset}"):
-            img_cuda = img_tensor.unsqueeze(0).cuda()
-            high = high.unsqueeze(0).cuda()
-            low = low.unsqueeze(0).cuda()
+            img_cuda = img_tensor.unsqueeze(0).to(cfg.device)
+            high = high.unsqueeze(0).to(cfg.device)
+            low = low.unsqueeze(0).to(cfg.device)
             
             out1_tensor = model(img_cuda, high, low)[0]
             out1_tensor = F.interpolate(out1_tensor, size=gt_tensor.shape[1:], mode='bilinear', align_corners=True)
@@ -71,7 +71,9 @@ if __name__ == '__main__':
                         help="Datasets to run inference on (default: all).")
     parser.add_argument('--save_dir', type=str, default="/kaggle/working/models",
                         help="Directory where checkpoints are stored.")
-    parser.add_argument('--model', type=str, default='FINet',)
+    parser.add_argument('--model', type=str, default='FINet', choices=MODEL_CHOICES)
+    parser.add_argument('--backbone', type=str, default='efficientb0', choices=BACKBONE_CHOICES,
+                        help="Backbone used by the checkpoint.")
     args = parser.parse_args()
 
     run = None
@@ -90,18 +92,16 @@ if __name__ == '__main__':
 
     cfg = Config()
 
-    model = FINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
-    if args.model == "LaFINet":
-        from Model.LAFinet import LaplacianFINet
-        print("Using LaFINet model for inference.")
-        model = LaplacianFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+    args.model = normalize_model_name(args.model)
+    model = build_model(args.model, backbone=args.backbone, channels=(8, 24, 32, 64)).to(cfg.device)
+    print(f"Using {args.model} with {args.backbone} backbone for inference.")
 
     # ---- Load checkpoint ----
     if args.ckpt is not None:
         checkpoint = torch.load(args.ckpt, map_location=cfg.device)
         print(f"Loaded checkpoint from {args.ckpt}")
     else:
-        checkpoints = sorted(glob.glob(os.path.join(args.save_dir, "FINet_epoch*.pth")))
+        checkpoints = sorted(glob.glob(os.path.join(args.save_dir, f"{args.model}_{args.backbone}_epoch*.pth")))
 
         if checkpoints:
             latest_ckpt = checkpoints[-1]

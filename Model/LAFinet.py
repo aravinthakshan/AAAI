@@ -3,10 +3,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 from Model.EfficientNet import EfficientNet_B0
 from Model.TinyNet import TinyNetA
+from Model.Starnet import StarNetEncoder
+from Model.Demonet import DemoNetEncoder
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
 from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock, LDConv, asf_attention_model, ScalSeq, GOLDYOLO_Attention, top_Block
 from Model.Replacements import FSM_FFM
-from Model.ccnet import RCCAModule  
+
+
+def build_lafinet_backbone(backbone):
+    if backbone == 'efficientb0':
+        return EfficientNet_B0()
+    if backbone == 'tinynet-a':
+        return TinyNetA()
+    if backbone.startswith('starnet_'):
+        return StarNetEncoder(variant=backbone)
+    if backbone.startswith('demonet_'):
+        parts = backbone.split('_')
+        if len(parts) != 4 or not parts[1].startswith('d') or not parts[2].startswith('w'):
+            raise ValueError(f"Invalid DemoNet backbone name: {backbone}")
+        depth = int(parts[1][1:])
+        dim = int(parts[2][1:])
+        mode = parts[3]
+        return DemoNetEncoder(depth=depth, dim=dim, mode=mode)
+    raise ValueError(f"Unsupported LaFINet backbone: {backbone}")
 
 class LapFusion(nn.Module):
     """
@@ -232,13 +251,7 @@ class LaplacianFINet(nn.Module):
     def __init__(self, backbone='efficientb0', channels=(8, 12, 24, 48)):
         super(LaplacianFINet, self).__init__()
 
-        if backbone == 'efficientb0':
-            self.encoder = EfficientNet_B0()
-        elif backbone == 'tinynet-a':
-            self.encoder = TinyNetA()
-        else:
-            print('backbone error')
-            return
+        self.encoder = build_lafinet_backbone(backbone)
 
         # Laplacian Pyramid decomposition with only 3 levels
         self.laplacian_pyramid = LaplacianPyramid(num_levels=3)
@@ -282,6 +295,9 @@ class LaplacianFINet(nn.Module):
         self.asf3 = asf_attention_model(channels[2])
         self.asf2 = asf_attention_model(channels[1])
         self.asf1 = asf_attention_model(channels[0])
+        self.asf_proj3 = nn.Conv2d(channels[3], channels[2], kernel_size=1)
+        self.asf_proj2 = nn.Conv2d(channels[2], channels[1], kernel_size=1)
+        self.asf_proj1 = nn.Conv2d(channels[1], channels[0], kernel_size=1)
         self.ssff = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
 
         #self.gold4 = top_Block(channels[3])
@@ -337,15 +353,15 @@ class LaplacianFINet(nn.Module):
 
         out3 = self.asf3([
             out3,
-            F.interpolate(out4, size=out3.shape[2:], mode='bilinear', align_corners=False)
+            self.asf_proj3(F.interpolate(out4, size=out3.shape[2:], mode='bilinear', align_corners=False))
         ])
         out2 = self.asf2([  
             out2,
-            F.interpolate(out3, size=out2.shape[2:], mode='bilinear', align_corners=False)
+            self.asf_proj2(F.interpolate(out3, size=out2.shape[2:], mode='bilinear', align_corners=False))
         ])
         out1 = self.asf1([
             out1,
-            F.interpolate(out2, size=out1.shape[2:], mode='bilinear', align_corners=False)
+            self.asf_proj1(F.interpolate(out2, size=out1.shape[2:], mode='bilinear', align_corners=False))
         ])
 
 
