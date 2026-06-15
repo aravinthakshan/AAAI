@@ -13,6 +13,10 @@ from Model.model_factory import BACKBONE_CHOICES, MODEL_CHOICES, build_model, no
 
 NUM_IMAGES_TO_LOG = 5
 
+def wandb_is_enabled():
+    run = wandb.run
+    return run is not None and not getattr(run, "disabled", False)
+
 def inference(datasets):
     global model, cfg
     model.eval()
@@ -26,7 +30,9 @@ def inference(datasets):
                                    gt_root=getattr(cfg.dp, f'test_{dataset}_masks'),
                                    testsize=cfg.trainsize)
 
-        inference_table = wandb.Table(columns=["Image Name", "Image", "Ground Truth", "Prediction"])
+        inference_table = None
+        if wandb_is_enabled():
+            inference_table = wandb.Table(columns=["Image Name", "Image", "Ground Truth", "Prediction"])
         log_count = 0
 
         for img_tensor, _, gt_tensor, name, high, low in tqdm(test_dataset, desc=f"Inferring on {dataset}"):
@@ -42,7 +48,7 @@ def inference(datasets):
             
             cv2.imwrite(os.path.join(save_path, name), pred_np)
 
-            if log_count < NUM_IMAGES_TO_LOG:
+            if inference_table is not None and log_count < NUM_IMAGES_TO_LOG:
                 img_np = img_tensor.cpu().numpy().transpose(1, 2, 0)
                 mean = np.array([0.485, 0.456, 0.406])
                 std = np.array([0.229, 0.224, 0.225])
@@ -59,7 +65,8 @@ def inference(datasets):
                 )
                 log_count += 1
         
-        wandb.log({f"Inference Results/{dataset}": inference_table})
+        if wandb_is_enabled():
+            wandb.log({f"Inference Results/{dataset}": inference_table})
 
 
 if __name__ == '__main__':
@@ -74,21 +81,31 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='FINet', choices=MODEL_CHOICES)
     parser.add_argument('--backbone', type=str, default='efficientb0', choices=BACKBONE_CHOICES,
                         help="Backbone used by the checkpoint.")
+    parser.add_argument('--wandb_project', type=str, default=os.environ.get("WANDB_PROJECT", "FINET testing"),
+                        help='W&B project name.')
+    parser.add_argument('--wandb_entity', type=str, default=os.environ.get("WANDB_ENTITY", "MRM_AAAI-student-26"),
+                        help='W&B entity/team name. Set to an empty string to use the default account.')
+    parser.add_argument('--disable_wandb', action='store_true', default=False,
+                        help='Disable W&B logging.')
     args = parser.parse_args()
 
     run = None
-    try:
-        with open("wandb_run_id.txt", "r") as f:
-            run_id = f.read().strip()
-        run = wandb.init(
-            project="FINET testing",
-            entity="MRM_AAAI-student-26",
-            id=run_id,
-            resume="must"
-        )
-        print(f"Resumed W&B run {run_id} for inference.")
-    except Exception as e:
-        print(f"Could not resume W&B run for inference. Error: {e}")
+    if args.disable_wandb:
+        run = wandb.init(mode="disabled")
+    else:
+        try:
+            with open("wandb_run_id.txt", "r") as f:
+                run_id = f.read().strip()
+            run = wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity or None,
+                id=run_id,
+                resume="must"
+            )
+            print(f"Resumed W&B run {run_id} for inference.")
+        except Exception as e:
+            print(f"Could not resume W&B run for inference; continuing with W&B disabled. Error: {e}")
+            run = wandb.init(mode="disabled")
 
     cfg = Config()
 
@@ -113,6 +130,9 @@ if __name__ == '__main__':
     model.load_state_dict(checkpoint['model'])
 
     inference(args.datasets)
+
+    if wandb_is_enabled():
+        run.finish()
 
 # if __name__ == '__main__':
 # 	pth_path =  '/kaggle/working/models/FINet.pth'

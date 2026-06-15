@@ -8,6 +8,10 @@ import pandas as pd
 import argparse
 from Model.model_factory import BACKBONE_CHOICES, MODEL_CHOICES, normalize_model_name
 
+def wandb_is_enabled():
+    run = wandb.run
+    return run is not None and not getattr(run, "disabled", False)
+
 def evaluate(pred_path, dataset):
     global cfg
     pred_root = os.path.join(pred_path, dataset)
@@ -37,22 +41,32 @@ if __name__ == '__main__':
                         help='Model name to log with evaluation metadata.')
     parser.add_argument('--backbone', type=str, default='efficientb0', choices=BACKBONE_CHOICES,
                         help='Backbone name to log with evaluation metadata.')
+    parser.add_argument('--wandb_project', type=str, default=os.environ.get("WANDB_PROJECT", "FINET testing"),
+                        help='W&B project name.')
+    parser.add_argument('--wandb_entity', type=str, default=os.environ.get("WANDB_ENTITY", "MRM_AAAI-student-26"),
+                        help='W&B entity/team name. Set to an empty string to use the default account.')
+    parser.add_argument('--disable_wandb', action='store_true', default=False,
+                        help='Disable W&B logging.')
     args = parser.parse_args()
     args.model = normalize_model_name(args.model)
 
     run = None
-    try:
-        with open("wandb_run_id.txt", "r") as f:
-            run_id = f.read().strip()
+    if args.disable_wandb:
+        run = wandb.init(mode="disabled")
+    else:
+        try:
+            with open("wandb_run_id.txt", "r") as f:
+                run_id = f.read().strip()
             run = wandb.init(
-                project="FINET testing",
-                entity="MRM_AAAI-student-26",
+                project=args.wandb_project,
+                entity=args.wandb_entity or None,
                 id=run_id,
                 resume="must"
             )
-            print(f"Resumed W&B run {run_id} for evaluation.")   
-    except Exception as e:
-        print(f"Could not resume W&B run for evaluation. Error: {e}")
+            print(f"Resumed W&B run {run_id} for evaluation.")
+        except Exception as e:
+            print(f"Could not resume W&B run for evaluation; continuing with W&B disabled. Error: {e}")
+            run = wandb.init(mode="disabled")
 
     cfg = Config()
     datasets = args.datasets
@@ -65,7 +79,8 @@ if __name__ == '__main__':
         # Log individual metrics as charts (your original logic)
         wandb_metrics = {f"eval/{dataset}/{key}": value for key, value in metric_dic.items()}
         wandb_metrics.update({"eval/model": args.model, "eval/backbone": args.backbone})
-        wandb.log(wandb_metrics)
+        if wandb_is_enabled():
+            wandb.log(wandb_metrics)
         
         # Add dataset name to the dictionary and append to our list
         metric_dic['dataset'] = dataset
@@ -82,20 +97,22 @@ if __name__ == '__main__':
         # Reorder columns to have 'dataset' first
         df = df[['dataset'] + [col for col in df.columns if col != 'dataset']]
         # Create a W&B Table from the DataFrame
-        results_table = wandb.Table(dataframe=df)
+        results_table = wandb.Table(dataframe=df) if wandb_is_enabled() else None
         
         print("\n--- Evaluation Summary ---")
         print(df)
         
-        wandb.log({"Evaluation_Summary": results_table})
+        if wandb_is_enabled():
+            wandb.log({"Evaluation_Summary": results_table})
 
     if all_results:
         avg_metrics = df.drop(columns=['dataset']).mean().to_dict()
-        wandb.summary.update({f"avg_{key}": value for key, value in avg_metrics.items()})
+        if wandb_is_enabled():
+            wandb.summary.update({f"avg_{key}": value for key, value in avg_metrics.items()})
         print("\n--- Average Metrics ---")
         for key, value in avg_metrics.items():
             print(f"avg_{key}: {value}")
 
-    if run:
+    if wandb_is_enabled():
         run.finish()
         print("\nEvaluation finished and W&B run closed.")

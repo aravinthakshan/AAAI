@@ -15,6 +15,50 @@ import wandb
 from Model.lap_utils import LaplacianPyramid
 from Model.model_factory import BACKBONE_CHOICES, MODEL_CHOICES, build_model, normalize_model_name
 
+def wandb_is_enabled():
+    run = wandb.run
+    return run is not None and not getattr(run, "disabled", False)
+
+def get_wandb_api_key():
+    api_key = os.environ.get("WANDB_API_KEY")
+    if api_key:
+        return api_key
+
+    try:
+        from kaggle_secrets import UserSecretsClient
+        return UserSecretsClient().get_secret("WANDB_API_KEY")
+    except Exception:
+        return None
+
+def init_wandb(args, cfg):
+    if args.disable_wandb:
+        return wandb.init(mode="disabled")
+
+    api_key = get_wandb_api_key()
+    try:
+        if api_key:
+            wandb.login(key=api_key, relogin=True)
+            print("Logged into wandb successfully.")
+        else:
+            wandb.login()
+            print("Logged into wandb using cached credentials.")
+
+        return wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity or None,
+            config={
+                "learning_rate": cfg.learning_rate,
+                "architecture": args.model,
+                "backbone": args.backbone,
+                "optimizer": args.optimizer,
+                "epochs": cfg.epochs,
+                "batch_size": cfg.batch_size,
+            }
+        )
+    except Exception as e:
+        print(f"Could not start W&B run; continuing with W&B disabled. Error: {e}")
+        return wandb.init(mode="disabled")
+
 def train(start_epoch=0, model_name="LAFinet"):
     global model, train_datald, optimizer, cfg, scheduler, args
     model_name = normalize_model_name(model_name)
@@ -85,7 +129,7 @@ def train(start_epoch=0, model_name="LAFinet"):
             print(f"Checkpoint saved at {save_path}")
 
         #Saving weights to WandB
-        if epoch == cfg.epochs - 1:
+        if epoch == cfg.epochs - 1 and wandb_is_enabled() and save_path:
               artifact = wandb.Artifact(
                   name=f'{model_name}{cfg.epochs}-{wandb.run.name}e-final',  # Simplified name for the final model
                   type='model',
@@ -114,6 +158,12 @@ if __name__ == '__main__':
                         help='Path to a specific checkpoint to resume from')
     parser.add_argument('--model', type=str, default='LAFinet', choices=MODEL_CHOICES)
     parser.add_argument('--trial', action='store_true', default= False)
+    parser.add_argument('--wandb_project', type=str, default=os.environ.get("WANDB_PROJECT", "FINET testing"),
+                        help='W&B project name.')
+    parser.add_argument('--wandb_entity', type=str, default=os.environ.get("WANDB_ENTITY", "MRM_AAAI-student-26"),
+                        help='W&B entity/team name. Set to an empty string to use the default account.')
+    parser.add_argument('--disable_wandb', action='store_true', default=False,
+                        help='Disable W&B logging and artifact upload.')
     args = parser.parse_args()
 
     # ---- Seeding ----
@@ -128,35 +178,14 @@ if __name__ == '__main__':
 
     cfg = Config()
 
-    #WANDB
-
-    try:
-        # from kaggle_secrets import UserSecretsClient
-        # user_secrets = UserSecretsClient()
-        wandb_api_key = "4cdb0327752ba297aeb4f82dcc902d5f2e1d5eae"
-        wandb.login(key=wandb_api_key)
-        print("Logged into wandb successfully.")
-    except ImportError:
-        print("Kaggle secrets not found. Please ensure you're in a Kaggle environment or log in manually.")
-    except Exception as e:
-        print(f"Could not log in to wandb: {e}")
-
-    wandb.init(
-        project="FINET testing",
-        entity="MRM_AAAI-student-26", 
-        config={
-            "learning_rate": cfg.learning_rate,
-            "architecture": args.model,
-            "backbone": args.backbone,
-            "optimizer": args.optimizer,
-            "epochs": cfg.epochs,
-            "batch_size": cfg.batch_size,
-        }
-    )
+    run = init_wandb(args, cfg)
     #saving wandb name for use inn inference and evaluate
-    print(f"Started W&B run with ID: {wandb.run.id}")
-    with open("wandb_run_id.txt", "w") as f:
-        f.write(wandb.run.id)
+    if wandb_is_enabled():
+        print(f"Started W&B run with ID: {run.id}")
+        with open("wandb_run_id.txt", "w") as f:
+            f.write(run.id)
+    else:
+        print("W&B logging is disabled for this run.")
 
     # ---- Model ----
     args.model = normalize_model_name(args.model)
