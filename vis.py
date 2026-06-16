@@ -146,10 +146,10 @@ def main():
     cfg = Config()
     
     from Model.LAFinet import LaplacianFINet
-    model = LaplacianFINet(backbone='efficientb0', channels=(8, 24, 32, 64)).to(cfg.device)
+    model = LaplacianFINet(backbone='starnet_s050', channels=(8, 24, 32, 64)).to(cfg.device)
     
     # Load checkpoint
-    checkpoint = torch.load("/kaggle/input/finetmodel2/pytorch/default/1/FINet_epoch200(1).pth", map_location=cfg.device, weights_only=False)
+    checkpoint = torch.load("/kaggle/input/datasets/adityanaidu1412/lestar/LAFinet_starnet_s050_epoch190.pth", map_location=cfg.device, weights_only=False)
     model.load_state_dict(checkpoint['model'])
     print("✓ Model loaded successfully")
     
