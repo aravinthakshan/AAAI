@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 import math
+import kornia
 
 class LaplacianPyramid(nn.Module):
     """
@@ -11,16 +12,21 @@ class LaplacianPyramid(nn.Module):
     Works for ANY number of channels (auto-detected).
     Perfect for LapLoss in segmentation.
     """
-    def __init__(self, num_levels=3):
+    def __init__(self, num_levels=3, apply_clahe=True, clip_limit=2.0, grid_size=(8, 8)):
         super(LaplacianPyramid, self).__init__()
         self.num_levels = num_levels
+        
+        # CLAHE Parameters
+        self.apply_clahe = apply_clahe
+        self.clip_limit = clip_limit
+        self.grid_size = grid_size
 
         # Register gaussian kernel (5x5) — initialized for 1 channel,
         # but repeated for correct num_channels at runtime.
         self.register_buffer("base_kernel", self._make_kernel())
 
     def _make_kernel(self):
-        """Return 5×5 Gaussian kernel (base, before channel expansion)."""
+        """Return 5x5 Gaussian kernel (base, before channel expansion)."""
         g = torch.tensor([
             [1, 4, 6, 4, 1],
             [4, 16, 24, 16, 4],
@@ -54,18 +60,30 @@ class LaplacianPyramid(nn.Module):
         Returns Laplacian pyramid:
             [L0, L1, ..., L(n-2), Gaussian_last]
         Where L0 is highest-resolution detail.
+        
+        NOTE: 'x' should be a float tensor scaled between [0.0, 1.0] 
+        for Kornia's CLAHE to work properly.
         """
+        # 1. Apply Differentiable CLAHE
+        if self.apply_clahe:
+            # kornia.enhance.equalize_clahe expects image in range [0, 1]
+            x = kornia.enhance.equalize_clahe(
+                x, 
+                clip_limit=self.clip_limit, 
+                grid_size=self.grid_size
+            )
+
         gaussian_pyr = []
         current = x
 
-        # Build Gaussian pyramid
+        # 2. Build Gaussian pyramid
         for i in range(self.num_levels):
             gaussian_pyr.append(current)
             if i != self.num_levels - 1:
                 blurred = self._gaussian_blur(current)
                 current = self._downsample(blurred)
 
-        # Build Laplacian pyramid
+        # 3. Build Laplacian pyramid
         laplacian_pyr = []
         for i in range(self.num_levels - 1):
             up = self._upsample(gaussian_pyr[i + 1], gaussian_pyr[i].shape[2:])
