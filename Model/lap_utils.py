@@ -24,6 +24,8 @@ class LaplacianPyramid(nn.Module):
         # Register gaussian kernel (5x5) — initialized for 1 channel,
         # but repeated for correct num_channels at runtime.
         self.register_buffer("base_kernel", self._make_kernel())
+        self.register_buffer("imagenet_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer("imagenet_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
 
     def _make_kernel(self):
         """Return 5x5 Gaussian kernel (base, before channel expansion)."""
@@ -55,6 +57,21 @@ class LaplacianPyramid(nn.Module):
         """Upsample to match the previous Gaussian level."""
         return F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
 
+    def _prepare_for_clahe(self, x):
+        """
+        Kornia CLAHE expects values in [0, 1]. Training images arrive
+        ImageNet-normalized, so undo that normalization for RGB inputs.
+        """
+        clahe_input = x
+        if x.shape[1] == 3 and (x.min() < 0 or x.max() > 1):
+            mean = self.imagenet_mean.to(dtype=x.dtype)
+            std = self.imagenet_std.to(dtype=x.dtype)
+            clahe_input = x * std + mean
+
+        # Keep the upper bound just below 1 to avoid histogram bin overflow
+        # in older Kornia/PyTorch CUDA combinations.
+        return clahe_input.clamp(0.0, 1.0 - 1e-6)
+
     def forward(self, x):
         """
         Returns Laplacian pyramid:
@@ -67,6 +84,7 @@ class LaplacianPyramid(nn.Module):
         # 1. Apply Differentiable CLAHE
         if self.apply_clahe:
             # kornia.enhance.equalize_clahe expects image in range [0, 1]
+            x = self._prepare_for_clahe(x)
             x = kornia.enhance.equalize_clahe(
                 x, 
                 clip_limit=self.clip_limit, 
@@ -455,7 +473,7 @@ class MultiScaleLapLoss(nn.Module):
         self.num_levels = num_levels
         
         # Your LaplacianPyramid class
-        self.lap_pyr = LaplacianPyramid(num_levels=num_levels)
+        self.lap_pyr = LaplacianPyramid(num_levels=num_levels, apply_clahe=False)
 
     def forward(self, logits, mask):
         # Resize mask if needed
