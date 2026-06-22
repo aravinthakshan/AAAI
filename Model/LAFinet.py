@@ -131,15 +131,15 @@ class LaplacianFINet(nn.Module):
         self.out_conv3 = nn.Conv2d(channels[2], 1, kernel_size=3, padding=1)
         self.out_conv4 = nn.Conv2d(channels[3], 1, kernel_size=3, padding=1)
 
-        # ASF attention + ScalSeq (unchanged)
-        self.asf4      = asf_attention_model(channels[3])
-        self.asf3      = asf_attention_model(channels[2])
-        self.asf2      = asf_attention_model(channels[1])
-        self.asf1      = asf_attention_model(channels[0])
-        self.asf_proj3 = nn.Conv2d(channels[3], channels[2], kernel_size=1)
-        self.asf_proj2 = nn.Conv2d(channels[2], channels[1], kernel_size=1)
-        self.asf_proj1 = nn.Conv2d(channels[1], channels[0], kernel_size=1)
-        self.ssff      = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
+        # # ASF attention + ScalSeq (unchanged)
+        # self.asf4      = asf_attention_model(channels[3])
+        # self.asf3      = asf_attention_model(channels[2])
+        # self.asf2      = asf_attention_model(channels[1])
+        # self.asf1      = asf_attention_model(channels[0])
+        # self.asf_proj3 = nn.Conv2d(channels[3], channels[2], kernel_size=1)
+        # self.asf_proj2 = nn.Conv2d(channels[2], channels[1], kernel_size=1)
+        # self.asf_proj1 = nn.Conv2d(channels[1], channels[0], kernel_size=1)
+        # self.ssff      = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
 
     # ──────────────────────────────────────────────────────────────────────────
     # Forward  (logic unchanged — only module calls differ)
@@ -192,23 +192,23 @@ class LaplacianFINet(nn.Module):
             ) + x1
         )
 
-        # ScalSeq multi-scale aggregation + ASF attention (unchanged)
-        fused = self.ssff([x1, x2, x3])
-        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+        # # ScalSeq multi-scale aggregation + ASF attention (unchanged)
+        # fused = self.ssff([x1, x2, x3])
+        # fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
 
-        out4 = self.asf4([out4, fused])
-        out3 = self.asf3([
-            out3,
-            self.asf_proj3(F.interpolate(out4, size=out3.shape[2:], mode='bilinear', align_corners=False))
-        ])
-        out2 = self.asf2([
-            out2,
-            self.asf_proj2(F.interpolate(out3, size=out2.shape[2:], mode='bilinear', align_corners=False))
-        ])
-        out1 = self.asf1([
-            out1,
-            self.asf_proj1(F.interpolate(out2, size=out1.shape[2:], mode='bilinear', align_corners=False))
-        ])
+        # out4 = self.asf4([out4, fused])
+        # out3 = self.asf3([
+        #     out3,
+        #     self.asf_proj3(F.interpolate(out4, size=out3.shape[2:], mode='bilinear', align_corners=False))
+        # ])
+        # out2 = self.asf2([
+        #     out2,
+        #     self.asf_proj2(F.interpolate(out3, size=out2.shape[2:], mode='bilinear', align_corners=False))
+        # ])
+        # out1 = self.asf1([
+        #     out1,
+        #     self.asf_proj1(F.interpolate(out2, size=out1.shape[2:], mode='bilinear', align_corners=False))
+        # ])
 
         # Multi-scale outputs → upsample to 4× of out1 resolution
         out1 = self.out_conv1(out1)
