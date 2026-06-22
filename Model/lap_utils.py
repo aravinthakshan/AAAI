@@ -12,23 +12,16 @@ class LaplacianPyramid(nn.Module):
     Works for ANY number of channels (auto-detected).
     Perfect for LapLoss in segmentation.
     """
-    def __init__(self, num_levels=3, apply_clahe=True, clip_limit=2.0, grid_size=(8, 8)):
+    def __init__(self, num_levels=3):
         super(LaplacianPyramid, self).__init__()
         self.num_levels = num_levels
-        
-        # CLAHE Parameters
-        self.apply_clahe = apply_clahe
-        self.clip_limit = clip_limit
-        self.grid_size = grid_size
 
         # Register gaussian kernel (5x5) — initialized for 1 channel,
         # but repeated for correct num_channels at runtime.
         self.register_buffer("base_kernel", self._make_kernel())
-        self.register_buffer("imagenet_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
-        self.register_buffer("imagenet_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
 
     def _make_kernel(self):
-        """Return 5x5 Gaussian kernel (base, before channel expansion)."""
+        """Return 5×5 Gaussian kernel (base, before channel expansion)."""
         g = torch.tensor([
             [1, 4, 6, 4, 1],
             [4, 16, 24, 16, 4],
@@ -57,51 +50,23 @@ class LaplacianPyramid(nn.Module):
         """Upsample to match the previous Gaussian level."""
         return F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
 
-    def _prepare_for_clahe(self, x):
-        """
-        Kornia CLAHE expects values in [0, 1]. Training images arrive
-        ImageNet-normalized, so undo that normalization for RGB inputs.
-        """
-        clahe_input = x
-        if x.shape[1] == 3 and (x.min() < 0 or x.max() > 1):
-            mean = self.imagenet_mean.to(dtype=x.dtype)
-            std = self.imagenet_std.to(dtype=x.dtype)
-            clahe_input = x * std + mean
-
-        # Keep the upper bound just below 1 to avoid histogram bin overflow
-        # in older Kornia/PyTorch CUDA combinations.
-        return clahe_input.clamp(0.0, 1.0 - 1e-6)
-
     def forward(self, x):
         """
         Returns Laplacian pyramid:
             [L0, L1, ..., L(n-2), Gaussian_last]
         Where L0 is highest-resolution detail.
-        
-        NOTE: 'x' should be a float tensor scaled between [0.0, 1.0] 
-        for Kornia's CLAHE to work properly.
         """
-        # 1. Apply Differentiable CLAHE
-        if self.apply_clahe:
-            # kornia.enhance.equalize_clahe expects image in range [0, 1]
-            x = self._prepare_for_clahe(x)
-            x = kornia.enhance.equalize_clahe(
-                x, 
-                clip_limit=self.clip_limit, 
-                grid_size=self.grid_size
-            )
-
         gaussian_pyr = []
         current = x
 
-        # 2. Build Gaussian pyramid
+        # Build Gaussian pyramid
         for i in range(self.num_levels):
             gaussian_pyr.append(current)
             if i != self.num_levels - 1:
                 blurred = self._gaussian_blur(current)
                 current = self._downsample(blurred)
 
-        # 3. Build Laplacian pyramid
+        # Build Laplacian pyramid
         laplacian_pyr = []
         for i in range(self.num_levels - 1):
             up = self._upsample(gaussian_pyr[i + 1], gaussian_pyr[i].shape[2:])
@@ -112,6 +77,114 @@ class LaplacianPyramid(nn.Module):
         laplacian_pyr.append(gaussian_pyr[-1])
 
         return laplacian_pyr
+
+# class LaplacianPyramid(nn.Module):
+#     """
+#     Laplacian Pyramid decomposition module
+#     Creates multiple frequency bands at different scales.
+#     Works for ANY number of channels (auto-detected).
+#     Perfect for LapLoss in segmentation.
+#     """
+#     def __init__(self, num_levels=3, apply_clahe=True, clip_limit=2.0, grid_size=(8, 8)):
+#         super(LaplacianPyramid, self).__init__()
+#         self.num_levels = num_levels
+        
+#         # CLAHE Parameters
+#         self.apply_clahe = apply_clahe
+#         self.clip_limit = clip_limit
+#         self.grid_size = grid_size
+
+#         # Register gaussian kernel (5x5) — initialized for 1 channel,
+#         # but repeated for correct num_channels at runtime.
+#         self.register_buffer("base_kernel", self._make_kernel())
+#         self.register_buffer("imagenet_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+#         self.register_buffer("imagenet_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+#     def _make_kernel(self):
+#         """Return 5x5 Gaussian kernel (base, before channel expansion)."""
+#         g = torch.tensor([
+#             [1, 4, 6, 4, 1],
+#             [4, 16, 24, 16, 4],
+#             [6, 24, 36, 24, 6],
+#             [4, 16, 24, 16, 4],
+#             [1, 4, 6, 4, 1]
+#         ], dtype=torch.float32) / 256.0
+
+#         g = g.unsqueeze(0).unsqueeze(0)  # shape [1,1,5,5]
+#         return g  # expand later to correct channels
+
+#     def _gaussian_blur(self, x):
+#         """
+#         Apply Gaussian blur with appropriate number of channels.
+#         Automatically expands 5x5 kernel to match x's channels.
+#         """
+#         C = x.shape[1]
+#         kernel = self.base_kernel.repeat(C, 1, 1, 1)  # [C,1,5,5]
+#         return F.conv2d(x, kernel, padding=2, groups=C)
+
+#     def _downsample(self, x):
+#         """Downsample by factor 2."""
+#         return F.interpolate(x, scale_factor=0.5, mode='bilinear', align_corners=False)
+
+#     def _upsample(self, x, target_size):
+#         """Upsample to match the previous Gaussian level."""
+#         return F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
+
+#     def _prepare_for_clahe(self, x):
+#         """
+#         Kornia CLAHE expects values in [0, 1]. Training images arrive
+#         ImageNet-normalized, so undo that normalization for RGB inputs.
+#         """
+#         clahe_input = x
+#         if x.shape[1] == 3 and (x.min() < 0 or x.max() > 1):
+#             mean = self.imagenet_mean.to(dtype=x.dtype)
+#             std = self.imagenet_std.to(dtype=x.dtype)
+#             clahe_input = x * std + mean
+
+#         # Keep the upper bound just below 1 to avoid histogram bin overflow
+#         # in older Kornia/PyTorch CUDA combinations.
+#         return clahe_input.clamp(0.0, 1.0 - 1e-6)
+
+#     def forward(self, x):
+#         """
+#         Returns Laplacian pyramid:
+#             [L0, L1, ..., L(n-2), Gaussian_last]
+#         Where L0 is highest-resolution detail.
+        
+#         NOTE: 'x' should be a float tensor scaled between [0.0, 1.0] 
+#         for Kornia's CLAHE to work properly.
+#         """
+#         # 1. Apply Differentiable CLAHE
+#         if self.apply_clahe:
+#             # kornia.enhance.equalize_clahe expects image in range [0, 1]
+#             x = self._prepare_for_clahe(x)
+#             x = kornia.enhance.equalize_clahe(
+#                 x, 
+#                 clip_limit=self.clip_limit, 
+#                 grid_size=self.grid_size
+#             )
+
+#         gaussian_pyr = []
+#         current = x
+
+#         # 2. Build Gaussian pyramid
+#         for i in range(self.num_levels):
+#             gaussian_pyr.append(current)
+#             if i != self.num_levels - 1:
+#                 blurred = self._gaussian_blur(current)
+#                 current = self._downsample(blurred)
+
+#         # 3. Build Laplacian pyramid
+#         laplacian_pyr = []
+#         for i in range(self.num_levels - 1):
+#             up = self._upsample(gaussian_pyr[i + 1], gaussian_pyr[i].shape[2:])
+#             lap = gaussian_pyr[i] - up
+#             laplacian_pyr.append(lap)
+
+#         # Final low-frequency Gaussian level
+#         laplacian_pyr.append(gaussian_pyr[-1])
+
+#         return laplacian_pyr
 
 
 class LaplacianInjectionBlock(nn.Module):
