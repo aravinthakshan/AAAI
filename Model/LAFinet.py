@@ -8,7 +8,7 @@ from Model.Demonet import DemoNetEncoder
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
 from Model.lap_utils import LaplacianPyramid, LaplacianInjectionBlock, LDConv, asf_attention_model, ScalSeq, GOLDYOLO_Attention, top_Block
 from Model.Replacements import FSM_FFM
-
+from Model.Starnet import Block
 
 def build_lafinet_backbone(backbone):
     if backbone == 'efficientb0':
@@ -131,17 +131,17 @@ class DeBlock(nn.Module):
         self.conv3 = DepthwiseSeparableConv(in_channels=out_channels, out_channels=out_channels, kernel_size=(3, 1),
                                               padding=(1, 0), bias=True)
         self.bn = nn.BatchNorm2d(out_channels)
-        self.lap_decoder = Decoder(out_channels, out_channels)
+        #self.lap_decoder = Decoder(out_channels, out_channels)
 
     def forward(self, x):
         x = self.conv(x)
         x = self.conv1(x) + self.conv2(x) + self.conv3(x)
         x = self.bn(x)
         # Apply LAP decoder
-        out  = self.lap_decoder(x)
+        #out  = self.lap_decoder(x)
         # Combine all branches (hierarchical upsampling)
         #combined = low_out + middle_out + top_out
-        return out
+        return x
 
 class LFA(nn.Module):
     """Low Frequency Injection Module (unchanged from original)"""
