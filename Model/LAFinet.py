@@ -64,54 +64,50 @@ class Decoder(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(Decoder, self).__init__()
 
+        self.input_proj = nn.Identity()
+        if in_channels != out_channels:
+            self.input_proj = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+
         # Low branch:
         self.low_branch = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 3, padding=1),
-            nn.InstanceNorm2d(in_channels),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(in_channels, out_channels, 3, padding=1),
+            Block(out_channels),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1),
         )
 
         # Middle branch:
         self.middle_branch = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(in_channels, in_channels, 3, padding=1),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(in_channels, in_channels, 3, padding=1)
-            )
+            Block(out_channels)
             for _ in range(4)
         ])
 
         # Top branch:
         self.top_branch = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(in_channels, in_channels, 3, padding=1),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(in_channels, in_channels, 3, padding=1)
-            )
+            Block(out_channels)
             for _ in range(2)
         ])
 
         # Final lap outputs
-        self.final_mid = nn.Conv2d(in_channels, out_channels, 3, padding=1)
-        self.final_top = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+        self.final_mid = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        self.final_top = nn.Conv2d(out_channels, out_channels, 3, padding=1)
 
         self.fusion = LapFusion(out_channels)
 
     def forward(self, x):
+        x = self.input_proj(x)
+
         # Low
         low = self.low_branch(x)
 
         # Middle residual stack
         mid = x
         for block in self.middle_branch:
-            mid = mid + F.leaky_relu(block(mid), 0.2)
+            mid = block(mid)
         mid_out = self.final_mid(mid)
 
         # Top residual stack
         top = mid
         for block in self.top_branch:
-            top = top + F.leaky_relu(block(top), 0.2)
+            top = block(top)
         top_out = self.final_top(top)
 
         out = self.fusion(low, mid_out, top_out)
@@ -124,21 +120,18 @@ class DeBlock(nn.Module):
         super(DeBlock, self).__init__()
 
         self.conv = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, bias=True)
-        self.conv1 = DepthwiseSeparableConv(in_channels=out_channels, out_channels=out_channels, kernel_size=3, padding=1,
-                                              bias=True)
-        self.conv2 = DepthwiseSeparableConv(in_channels=out_channels, out_channels=out_channels, kernel_size=(1, 3),
-                                              padding=(0, 1), bias=True)
-        self.conv3 = DepthwiseSeparableConv(in_channels=out_channels, out_channels=out_channels, kernel_size=(3, 1),
-                                              padding=(1, 0), bias=True)
+        self.block1 = Block(out_channels)
+        self.block2 = Block(out_channels)
+        self.block3 = Block(out_channels)
         self.bn = nn.BatchNorm2d(out_channels)
-        #self.lap_decoder = Decoder(out_channels, out_channels)
+        self.lap_decoder = Decoder(out_channels, out_channels)
 
     def forward(self, x):
         x = self.conv(x)
-        x = self.conv1(x) + self.conv2(x) + self.conv3(x)
+        x = self.block1(x) + self.block2(x) + self.block3(x)
         x = self.bn(x)
         # Apply LAP decoder
-        #out  = self.lap_decoder(x)
+        x = self.lap_decoder(x)
         # Combine all branches (hierarchical upsampling)
         #combined = low_out + middle_out + top_out
         return x
