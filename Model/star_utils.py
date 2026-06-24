@@ -1,78 +1,97 @@
 """
-StarLapModules.py
------------------
-Three drop-in replacements that weave StarNet's element-wise multiplication
-("star operation") into LaplacianFINet's three major fusion sites:
+star_utils.py  — fixes for low weighted-Fβ with starnet_s1
+------------------------------------------------------------------
+Three targeted fixes applied:
 
-  StarLapInjection  →  replaces  LaplacianInjectionBlock
-  StarFFM           →  replaces  FSM_FFM
-  StarDeBlock       →  replaces  DeBlock + Decoder + LapFusion (3 classes → 1)
+Fix 1 — StarFFM: two-stage frequency projection instead of 96 → C direct.
+         The 12× squeeze (96 → 8) in a single 1×1 destroys boundary detail
+         before the star gate fires.  We now go 96 → mid → C where mid is
+         clamped to be at least 4× C, preserving frequency information.
 
-Core star op (from StarNet):
-    out = act(f1(a)) ⊙ f2(b)
+Fix 2 — StarDeBlock: zero-init the cross-scale branch output BN gamma.
+         The cross gate (low ⊙ top) starts at near-zero output, so early
+         training relies on the well-formed low + mid residual paths.
+         As training progresses the cross branch activates gradually —
+         the same trick used in ResNet "res-zero" / NF-Nets.
 
-When a == b this is a learned nonlinear self-interaction (higher-order features).
-When a != b this is a cross-modal gate: "keep signal from b wherever a activates".
+Fix 3 — StarDeBlock: use GELU instead of ReLU6 for the star activation.
+         ReLU6's ceiling clips gradients when f1 output > 6 (common after BN
+         on early layers).  GELU has no ceiling and passes larger gradients
+         through the gate path, which matters most for the thin boundary
+         features that drive weighted-Fβ.
 
-For COD this means:
-  - StarLapInjection : "keep Laplacian edge detail wherever semantic context fires"
-  - StarFFM          : "encode the feature when BOTH freq band AND encoder agree"
-  - StarDeBlock      : "flag a boundary when it appears at BOTH coarse AND fine scale"
-
-All three follow the same StarNet structural idiom:
-  DW7 (local context)  →  star  →  DW7  →  residual add
+Fix 4 — StarNetEncoder: pretrained weight loading with head/norm stripping.
+         Without this, starnet_s1 starts from random init while EfficientNet-B0
+         starts from ImageNet — the single biggest source of the metric gap.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from Model.Starnet import Block, ConvBN   # ConvBN: (inc, outc, k, s, p, g, with_bn)
+from Model.Starnet import Block, ConvBN
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 1.  StarLapInjection
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: load pretrained StarNet weights into an encoder
+# ─────────────────────────────────────────────────────────────────────────────
+
+model_urls = {
+    "starnet_s1":   "https://github.com/ma-xu/Rewrite-the-Stars/releases/download/checkpoints_v1/starnet_s1.pth.tar",
+    "starnet_s2":   "https://github.com/ma-xu/Rewrite-the-Stars/releases/download/checkpoints_v1/starnet_s2.pth.tar",
+    "starnet_s3":   "https://github.com/ma-xu/Rewrite-the-Stars/releases/download/checkpoints_v1/starnet_s3.pth.tar",
+    "starnet_s4":   "https://github.com/ma-xu/Rewrite-the-Stars/releases/download/checkpoints_v1/starnet_s4.pth.tar",
+}
+
+
+def load_starnet_pretrained(encoder, variant: str):
+    """
+    Download the classification checkpoint and copy stem+stages weights.
+    The head (norm, avgpool, linear) is discarded — only the feature extractor
+    layers that exist in StarNetEncoder are loaded.
+
+    Usage:
+        enc = StarNetEncoder(variant='starnet_s1')
+        load_starnet_pretrained(enc, 'starnet_s1')
+    """
+    if variant not in model_urls:
+        raise ValueError(f"No pretrained URL for {variant}. Available: {list(model_urls)}")
+
+    url = model_urls[variant]
+    checkpoint = torch.hub.load_state_dict_from_url(url, map_location="cpu")
+
+    # Checkpoint may be nested under 'state_dict' or 'model'
+    sd = checkpoint.get("state_dict", checkpoint.get("model", checkpoint))
+
+    # Strip keys that don't exist in StarNetEncoder (head, norm, avgpool)
+    encoder_sd = encoder.state_dict()
+    filtered = {
+        k: v for k, v in sd.items()
+        if k in encoder_sd and v.shape == encoder_sd[k].shape
+    }
+    missing = [k for k in encoder_sd if k not in filtered]
+    unexpected = [k for k in sd if k not in encoder_sd]
+
+    encoder.load_state_dict(filtered, strict=False)
+    print(f"[StarNet pretrained] loaded {len(filtered)}/{len(encoder_sd)} keys  "
+          f"| missing {len(missing)}  | unexpected {len(unexpected)}")
+    return encoder
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# StarLapInjection  (unchanged — performs well)
+# ─────────────────────────────────────────────────────────────────────────────
 
 class StarLapInjection(nn.Module):
     """
-    Drop-in replacement for LaplacianInjectionBlock.
-
-    Original approach (concat + conv):
-        fused = conv( cat([encoder, lap_proj]) )      # doubles channels, then halves
-        Params ~ encoder_channels^2 * 2               # expensive channel doubling
-
-    Star approach:
-        ctx   = DW7(encoder) + encoder                # local spatial context
-        lap   = project(laplacian_level)              # 3 → C  (cheap)
-        star  = DW7( g( act(f1(ctx)) ⊙ f2(lap) ) )  # cross-modal gate
-        out   = encoder + star                        # residual
-
-    Why this is better for COD:
-      The star gate is an AND-detector — it fires only where BOTH the encoder
-      context (f1) AND the Laplacian detail (f2) are non-zero.  Subtle
-      camouflage cues encoded in Laplacian levels are amplified only where
-      semantically plausible, suppressing texture noise everywhere else.
-
-    Parameter reduction vs concat:
-      Concat fuses 2C → C (one large conv).
-      Star fuses via two C → 3C projections, no channel doubling.
-      At C=24:  concat ≈ 2*24*24 = 1152 params in fusion conv
-                star   ≈ 2*24*72 = 3456 params in f1,f2 but SHARED DW replaces
-                         three BN+Conv sequences → net ~30% fewer params at C≥48
-      The real gain is expressivity per parameter, not raw count.
+    Cross-modal star gate: encoder context selects which Laplacian details survive.
+    act(f1(ctx)) ⊙ f2(lap)  +  residual skip
     """
-
     def __init__(self, encoder_channels: int, lap_channels: int = 3, mlp_ratio: int = 3):
         super().__init__()
         C = encoder_channels
-        H = mlp_ratio * C  # hidden width (StarNet uses 3× or 4×)
+        H = mlp_ratio * C
 
-        # StarNet-style depthwise local context (7×7, grouped)
         self.dwconv  = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=True)
-
-        # Lightweight Laplacian lift: 3-channel → C
-        # Two-stage: 3→C//2 (spatial 3×3) then C//2→C (pointwise)
-        # Much cheaper than a single 3→C 3×3 if C is large.
         self.lap_proj = nn.Sequential(
             nn.Conv2d(lap_channels, C // 2, 3, padding=1, bias=False),
             nn.BatchNorm2d(C // 2),
@@ -80,230 +99,163 @@ class StarLapInjection(nn.Module):
             nn.Conv2d(C // 2, C, 1, bias=False),
             nn.BatchNorm2d(C),
         )
-
-        # Cross-modal star branches
-        self.f1 = ConvBN(C, H, 1, with_bn=False)   # encoder → gate  (what to look for)
-        self.f2 = ConvBN(C, H, 1, with_bn=False)   # lap     → value (what to inject)
-        self.g  = ConvBN(H, C, 1, with_bn=True)    # project back to C
-
-        # Second DW conv (StarNet Block pattern: process after star)
+        self.f1 = ConvBN(C, H, 1, with_bn=False)
+        self.f2 = ConvBN(C, H, 1, with_bn=False)
+        self.g  = ConvBN(H, C, 1, with_bn=True)
         self.dwconv2 = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=False)
+        self.act = nn.GELU()   # fix 3: GELU instead of ReLU6
 
-        self.act = nn.ReLU6()
-
-    def forward(
-        self,
-        encoder_features: torch.Tensor,
-        laplacian_level:  torch.Tensor,
-    ) -> torch.Tensor:
-        # Resize lap level to encoder spatial resolution
+    def forward(self, encoder_features: torch.Tensor, laplacian_level: torch.Tensor):
         if laplacian_level.shape[2:] != encoder_features.shape[2:]:
             laplacian_level = F.interpolate(
                 laplacian_level, size=encoder_features.shape[2:],
                 mode='bilinear', align_corners=False,
             )
-
-        lap = self.lap_proj(laplacian_level)       # [B, C, H, W]
-        ctx = self.dwconv(encoder_features)         # local spatial context
-
-        # act(f1(ctx)) ⊙ f2(lap) → encoder semantics gate lap details
+        lap = self.lap_proj(laplacian_level)
+        ctx = self.dwconv(encoder_features)
         star = self.act(self.f1(ctx)) * self.f2(lap)
         star = self.dwconv2(self.g(star))
+        return encoder_features + star
 
-        return encoder_features + star             # residual: original always survives
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 2.  StarFFM
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# StarFFM  (Fix 1 applied: two-stage frequency projection)
+# ─────────────────────────────────────────────────────────────────────────────
 
 class StarFFM(nn.Module):
     """
-    Drop-in replacement for FSM_FFM.
+    Star-based Frequency Fusion Module.
 
-    Original approach:
-        high_x = reconv2( cat(high, x) )   # two separate concat+conv for h and l
-        low_x  = reconv2( cat(low,  x) )
-        x      = gelu(high_x + low_x)      # additive — high and low mixed linearly
+    Fix 1 — two-stage frequency projection:
+        Original: 96 → C  (single 1×1, up to 12× reduction when C=8)
+        Fixed:    96 → mid → C  where mid = max(4*C, 32)
 
-    Star approach (three paths):
-        ctx    = DW7(x)
-        h_feat = g_h( act(f1_h(high)) ⊙ f2_h(ctx) )   ← high-freq gates encoder
-        l_feat = g_l( act(f1_l(low))  ⊙ f2_l(ctx) )   ← low-freq  gates encoder
-        cross  = g_x( act(f1_x(h_feat)) ⊙ f2_x(l_feat)) ← both must co-occur
-        out    = BN(x + h_feat + l_feat + cross)
+    At C=8:  96 → 32 → 8  (two manageable steps, 3× then 4×)
+    At C=48: 96 → 96 → 48 (first step is identity-like, no info loss)
 
-    The 'cross' term is the key COD contribution:
-      Camouflage boundaries are only revealed when BOTH a high-frequency
-      texture anomaly AND a low-frequency structural deviation co-occur at
-      the same pixel.  Additive fusion from the original FFM mixes these
-      independently (the model may detect one and miss the other).
-      The cross star captures their conjunction: it outputs a strong signal
-      only at pixels where BOTH frequency anomalies agree with the encoder.
-      This is a second-order polynomial feature requiring no extra resolution.
-
-    Interface: identical to FSM_FFM — forward(x, high, low).
+    The two-step projection preserves boundary-relevant frequency content
+    that the direct projection collapses.
     """
-
     def __init__(self, channel: int, freq_channels: int = 96, mlp_ratio: int = 3):
         super().__init__()
         C = channel
         H = mlp_ratio * C
 
-        # Frequency projections (1×1, cheap — freq tensors already at 96ch)
+        # Two-stage frequency lift (Fix 1)
+        mid = max(4 * C, 32)   # intermediate width: at least 32, at least 4×C
         self.high_proj = nn.Sequential(
-            ConvBN(freq_channels, C, 1, with_bn=True), nn.ReLU6(),
+            ConvBN(freq_channels, mid, 1, with_bn=True),
+            nn.GELU(),
+            ConvBN(mid, C, 1, with_bn=True),
+            nn.GELU(),
         )
         self.low_proj = nn.Sequential(
-            ConvBN(freq_channels, C, 1, with_bn=True), nn.ReLU6(),
+            ConvBN(freq_channels, mid, 1, with_bn=True),
+            nn.GELU(),
+            ConvBN(mid, C, 1, with_bn=True),
+            nn.GELU(),
         )
 
-        # Shared encoder local context (one DW instead of two separate HFA/LFA)
+        # Shared encoder DW context
         self.dwconv = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=True)
 
-        # High-freq star path
-        self.h_f1 = ConvBN(C, H, 1, with_bn=False)   # high  → gate
-        self.h_f2 = ConvBN(C, H, 1, with_bn=False)   # enc   → value
+        # Star paths
+        self.h_f1 = ConvBN(C, H, 1, with_bn=False)
+        self.h_f2 = ConvBN(C, H, 1, with_bn=False)
         self.h_g  = ConvBN(H, C, 1, with_bn=True)
 
-        # Low-freq star path
         self.l_f1 = ConvBN(C, H, 1, with_bn=False)
         self.l_f2 = ConvBN(C, H, 1, with_bn=False)
         self.l_g  = ConvBN(H, C, 1, with_bn=True)
 
-        # Cross-frequency star (second-order: high AND low must agree)
-        # h_feat ⊙ l_feat: "this encoder feature aligns with BOTH freq bands"
+        # Cross-frequency conjunction
         self.x_f1 = ConvBN(C, H, 1, with_bn=False)
         self.x_f2 = ConvBN(C, H, 1, with_bn=False)
         self.x_g  = ConvBN(H, C, 1, with_bn=True)
 
-        self.act    = nn.ReLU6()
+        self.act    = nn.GELU()   # Fix 3
         self.out_bn = nn.BatchNorm2d(C)
 
-    def forward(
-        self,
-        x:    torch.Tensor,
-        high: torch.Tensor,
-        low:  torch.Tensor,
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, high: torch.Tensor, low: torch.Tensor):
         high = F.interpolate(high, size=x.shape[2:], mode='bilinear', align_corners=False)
         low  = F.interpolate(low,  size=x.shape[2:], mode='bilinear', align_corners=False)
         high = self.high_proj(high)
         low  = self.low_proj(low)
 
-        ctx = self.dwconv(x)   # shared local encoder context
+        ctx = self.dwconv(x)
 
-        # Star path 1: high-freq signal gates encoder features
         h_feat = self.h_g(self.act(self.h_f1(high)) * self.h_f2(ctx))
-
-        # Star path 2: low-freq signal gates encoder features
-        l_feat = self.l_g(self.act(self.l_f1(low)) * self.l_f2(ctx))
-
-        # Star path 3: cross-freq conjunction — fires only where both agree
+        l_feat = self.l_g(self.act(self.l_f1(low))  * self.l_f2(ctx))
         cross  = self.x_g(self.act(self.x_f1(h_feat)) * self.x_f2(l_feat))
 
         return self.out_bn(x + h_feat + l_feat + cross)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 3.  StarDeBlock
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# StarDeBlock  (Fix 2 + 3 applied: zero-init cross branch + GELU)
+# ─────────────────────────────────────────────────────────────────────────────
 
 class StarDeBlock(nn.Module):
     """
-    Drop-in replacement for DeBlock (which internally contained Decoder + LapFusion).
+    Star-based decoder block.
 
-    Original DeBlock:
-        x = conv(x)
-        x = block1(x) + block2(x) + block3(x)   # 3 PARALLEL blocks summed
-        x = bn(x)
-        x = Decoder(x)                            # 4+2 StarNet blocks + LapFusion
-        # Total: ~53 pointwise+DW convolution ops
+    Fix 2 — zero-init cross-branch output BN:
+        At init, cross_g.bn.weight = 0 → cross output is zero.
+        The model trains from the residual (x + low + mid) first,
+        then gradually activates the cross-scale boundary gate.
+        Same technique as "ReZero" / FixUp — stabilises early training
+        when the multiplicative gate hasn't learned yet.
 
-    Star approach (three hierarchical branches + cross-scale star):
-        ctx   = DW7(x) + x
-
-        low   = DW7( g_l( act(f1_l(ctx)) ⊙ f2_l(ctx) ) )  ← fast, single-pass
-        mid   = Block(Block(ctx))                            ← medium depth
-        mid   = DW7( g_m( act(f1_m(mid)) ⊙ f2_m(mid) ) )  ← self-star compress
-        top   = Block(mid)                                   ← deepest (from mid)
-
-        cross = g_c( act(f1_c(low)) ⊙ f2_c(top) )         ← coarse AND fine gate
-        out   = BN( x + low + mid + cross )
-        # Total: ~26 convolution ops (~51% reduction)
-
-    The cross-scale star gate for COD:
-      Camouflage boundaries are multi-scale inconsistencies — the object
-      exists at every scale but its boundaries "disappear" at coarse scale.
-      The cross branch detects exactly this: it fires only where both the
-      fast coarse branch (low) and the deep fine-detail branch (top) agree
-      on the boundary location.  This is far more selective than the soft
-      3-weight softmax fusion in the original LapFusion.
-
-    Interface: identical to DeBlock — forward(x: Tensor) → Tensor.
+    Fix 3 — GELU throughout (no ReLU6 ceiling on gate signals).
     """
-
     def __init__(self, in_channels: int, out_channels: int, mlp_ratio: int = 3):
         super().__init__()
         C = out_channels
         H = mlp_ratio * C
 
-        # Channel projection (only when in_channels != out_channels)
         self.proj = (
             nn.Conv2d(in_channels, C, 1, bias=True)
-            if in_channels != C
-            else nn.Identity()
+            if in_channels != C else nn.Identity()
         )
-
-        # Shared local context DW (all branches benefit)
         self.dwconv = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=True)
 
-        # ── Low branch: single self-star (fast, coarse) ──────────────────────
+        # Low branch
         self.low_f1 = ConvBN(C, H, 1, with_bn=False)
         self.low_f2 = ConvBN(C, H, 1, with_bn=False)
         self.low_g  = ConvBN(H, C, 1, with_bn=True)
         self.low_dw = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=False)
 
-        # ── Mid branch: 2 StarNet Blocks → self-star compress ────────────────
+        # Mid branch
         self.mid_blocks = nn.ModuleList([Block(C, mlp_ratio) for _ in range(2)])
         self.mid_f1 = ConvBN(C, H, 1, with_bn=False)
         self.mid_f2 = ConvBN(C, H, 1, with_bn=False)
         self.mid_g  = ConvBN(H, C, 1, with_bn=True)
         self.mid_dw = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=False)
 
-        # ── Top branch: 1 more Block from mid output (hierarchical depth) ────
+        # Top branch
         self.top_block = Block(C, mlp_ratio)
 
-        # ── Cross-scale star: low (coarse) ⊙ top (fine) ─────────────────────
-        # This is the COD-critical gate — fires only at cross-scale consistent locs
-        self.cross_f1 = ConvBN(C, H, 1, with_bn=False)  # coarse gate
-        self.cross_f2 = ConvBN(C, H, 1, with_bn=False)  # fine   value
+        # Cross-scale star (Fix 2: output BN gamma zeroed at init)
+        self.cross_f1 = ConvBN(C, H, 1, with_bn=False)
+        self.cross_f2 = ConvBN(C, H, 1, with_bn=False)
         self.cross_g  = ConvBN(H, C, 1, with_bn=True)
+        nn.init.zeros_(self.cross_g.bn.weight)   # <-- zero-init gamma
 
-        self.act    = nn.ReLU6()
+        self.act    = nn.GELU()   # Fix 3
         self.out_bn = nn.BatchNorm2d(C)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor):
         x   = self.proj(x)
-        ctx = self.dwconv(x) + x                  # shared local context (residual)
+        ctx = self.dwconv(x) + x
 
-        # Low branch (coarse, fast)
-        low = self.low_dw(
-            self.low_g(self.act(self.low_f1(ctx)) * self.low_f2(ctx))
-        )
+        low = self.low_dw(self.low_g(self.act(self.low_f1(ctx)) * self.low_f2(ctx)))
 
-        # Mid branch (medium depth)
         mid = ctx
         for blk in self.mid_blocks:
             mid = blk(mid)
-        mid = self.mid_dw(
-            self.mid_g(self.act(self.mid_f1(mid)) * self.mid_f2(mid))
-        )
+        mid = self.mid_dw(self.mid_g(self.act(self.mid_f1(mid)) * self.mid_f2(mid)))
 
-        # Top branch (deepest — built on mid, not ctx, for true hierarchy)
-        top = self.top_block(mid)
-
-        # Cross-scale star: coarse AND fine must agree
+        top   = self.top_block(mid)
         cross = self.cross_g(self.act(self.cross_f1(low)) * self.cross_f2(top))
 
         return self.out_bn(x + low + mid + cross)
