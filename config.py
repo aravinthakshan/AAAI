@@ -17,7 +17,7 @@ class Config:
         self.batch_size = 32
         self.weight_decay = 4e-8
         self.learning_rate = 2.6e-4
-        self.min_lr = 1e-7
+        self.min_lr = 1e-6
 
 
 # class DataPath:
