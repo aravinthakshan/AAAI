@@ -78,114 +78,6 @@ class LaplacianPyramid(nn.Module):
 
         return laplacian_pyr
 
-# class LaplacianPyramid(nn.Module):
-#     """
-#     Laplacian Pyramid decomposition module
-#     Creates multiple frequency bands at different scales.
-#     Works for ANY number of channels (auto-detected).
-#     Perfect for LapLoss in segmentation.
-#     """
-#     def __init__(self, num_levels=3, apply_clahe=True, clip_limit=2.0, grid_size=(8, 8)):
-#         super(LaplacianPyramid, self).__init__()
-#         self.num_levels = num_levels
-        
-#         # CLAHE Parameters
-#         self.apply_clahe = apply_clahe
-#         self.clip_limit = clip_limit
-#         self.grid_size = grid_size
-
-#         # Register gaussian kernel (5x5) — initialized for 1 channel,
-#         # but repeated for correct num_channels at runtime.
-#         self.register_buffer("base_kernel", self._make_kernel())
-#         self.register_buffer("imagenet_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
-#         self.register_buffer("imagenet_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
-
-#     def _make_kernel(self):
-#         """Return 5x5 Gaussian kernel (base, before channel expansion)."""
-#         g = torch.tensor([
-#             [1, 4, 6, 4, 1],
-#             [4, 16, 24, 16, 4],
-#             [6, 24, 36, 24, 6],
-#             [4, 16, 24, 16, 4],
-#             [1, 4, 6, 4, 1]
-#         ], dtype=torch.float32) / 256.0
-
-#         g = g.unsqueeze(0).unsqueeze(0)  # shape [1,1,5,5]
-#         return g  # expand later to correct channels
-
-#     def _gaussian_blur(self, x):
-#         """
-#         Apply Gaussian blur with appropriate number of channels.
-#         Automatically expands 5x5 kernel to match x's channels.
-#         """
-#         C = x.shape[1]
-#         kernel = self.base_kernel.repeat(C, 1, 1, 1)  # [C,1,5,5]
-#         return F.conv2d(x, kernel, padding=2, groups=C)
-
-#     def _downsample(self, x):
-#         """Downsample by factor 2."""
-#         return F.interpolate(x, scale_factor=0.5, mode='bilinear', align_corners=False)
-
-#     def _upsample(self, x, target_size):
-#         """Upsample to match the previous Gaussian level."""
-#         return F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
-
-#     def _prepare_for_clahe(self, x):
-#         """
-#         Kornia CLAHE expects values in [0, 1]. Training images arrive
-#         ImageNet-normalized, so undo that normalization for RGB inputs.
-#         """
-#         clahe_input = x
-#         if x.shape[1] == 3 and (x.min() < 0 or x.max() > 1):
-#             mean = self.imagenet_mean.to(dtype=x.dtype)
-#             std = self.imagenet_std.to(dtype=x.dtype)
-#             clahe_input = x * std + mean
-
-#         # Keep the upper bound just below 1 to avoid histogram bin overflow
-#         # in older Kornia/PyTorch CUDA combinations.
-#         return clahe_input.clamp(0.0, 1.0 - 1e-6)
-
-#     def forward(self, x):
-#         """
-#         Returns Laplacian pyramid:
-#             [L0, L1, ..., L(n-2), Gaussian_last]
-#         Where L0 is highest-resolution detail.
-        
-#         NOTE: 'x' should be a float tensor scaled between [0.0, 1.0] 
-#         for Kornia's CLAHE to work properly.
-#         """
-#         # 1. Apply Differentiable CLAHE
-#         if self.apply_clahe:
-#             # kornia.enhance.equalize_clahe expects image in range [0, 1]
-#             x = self._prepare_for_clahe(x)
-#             x = kornia.enhance.equalize_clahe(
-#                 x, 
-#                 clip_limit=self.clip_limit, 
-#                 grid_size=self.grid_size
-#             )
-
-#         gaussian_pyr = []
-#         current = x
-
-#         # 2. Build Gaussian pyramid
-#         for i in range(self.num_levels):
-#             gaussian_pyr.append(current)
-#             if i != self.num_levels - 1:
-#                 blurred = self._gaussian_blur(current)
-#                 current = self._downsample(blurred)
-
-#         # 3. Build Laplacian pyramid
-#         laplacian_pyr = []
-#         for i in range(self.num_levels - 1):
-#             up = self._upsample(gaussian_pyr[i + 1], gaussian_pyr[i].shape[2:])
-#             lap = gaussian_pyr[i] - up
-#             laplacian_pyr.append(lap)
-
-#         # Final low-frequency Gaussian level
-#         laplacian_pyr.append(gaussian_pyr[-1])
-
-#         return laplacian_pyr
-
 
 class LaplacianInjectionBlock(nn.Module):
     """
@@ -193,10 +85,10 @@ class LaplacianInjectionBlock(nn.Module):
     """
     def __init__(self, encoder_channels, laplacian_channels=3, output_channels=None):
         super(LaplacianInjectionBlock, self).__init__()
-        
+
         if output_channels is None:
             output_channels = encoder_channels
-            
+
         # Process Laplacian level to match encoder channels
         self.laplacian_conv = nn.Sequential(
             nn.Conv2d(laplacian_channels, encoder_channels // 2, kernel_size=3, padding=1),
@@ -205,14 +97,14 @@ class LaplacianInjectionBlock(nn.Module):
             nn.Conv2d(encoder_channels // 2, encoder_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(encoder_channels)
         )
-        
+
         # Fusion after concatenation
         self.fusion_conv = nn.Sequential(
             nn.Conv2d(encoder_channels * 2, output_channels, kernel_size=1),
             nn.BatchNorm2d(output_channels),
             nn.GELU()
         )
-        
+
     def forward(self, encoder_features, laplacian_level):
         """
         Inject Laplacian level into encoder features
@@ -223,19 +115,19 @@ class LaplacianInjectionBlock(nn.Module):
         # Resize Laplacian level to match encoder features
         if laplacian_level.shape[2:] != encoder_features.shape[2:]:
             laplacian_level = F.interpolate(
-                laplacian_level, 
-                size=encoder_features.shape[2:], 
-                mode='bilinear', 
+                laplacian_level,
+                size=encoder_features.shape[2:],
+                mode='bilinear',
                 align_corners=False
             )
-        
+
         # Process Laplacian level
         processed_laplacian = self.laplacian_conv(laplacian_level)
-        
+
         # Concatenate and fuse
         concatenated = torch.cat([encoder_features, processed_laplacian], dim=1)
         fused_features = self.fusion_conv(concatenated)
-        
+
         return fused_features
 
 class LDConv(nn.Module):
@@ -349,37 +241,37 @@ class LDConv(nn.Module):
         h_x = x.size(2)  # Height of input x
         w_x = x.size(3)  # Width of input x
         padded_w = w_x   # Use original width for index calculation
-        
+
         # Extract and clamp coordinates to x's spatial dimensions
         q_x = torch.clamp(q[..., :N], 0, h_x - 1)  # Clamp x-coordinates
         q_y = torch.clamp(q[..., N:], 0, w_x - 1)  # Clamp y-coordinates
-        
+
         # Compute flat indices
         index = q_x * padded_w + q_y  # Shape: (b, h_q, w_q, N)
-        
+
         # Validate indices are within bounds
         max_index = h_x * w_x - 1
         if not (torch.all(index >= 0) and torch.all(index <= max_index)):
             invalid = torch.logical_or(index < 0, index > max_index)
             print(f"Invalid indices found: {invalid.sum()} entries")
             raise AssertionError(f"Index out of bounds. Min: {index.min()}, Max: {index.max()}, Allowed: [0, {max_index}]")
-        
+
         # Reshape input x to (b, c, h_x * w_x)
         x_flat = x.contiguous().view(b, -1, h_x * w_x)
         c = x_flat.size(1)
-        
+
         # Prepare index tensor for gathering
         index = index.view(b, h_q, w_q, N)  # Ensure correct shape
         index = index.unsqueeze(1).expand(-1, c, -1, -1, -1)  # Shape: (b, c, h_q, w_q, N)
         index = index.contiguous().view(b, c, -1)  # Flatten to (b, c, h_q * w_q * N)
-        
+
         # Gather values from x_flat using index
         x_offset = x_flat.gather(dim=-1, index=index)  # Shape: (b, c, h_q * w_q * N)
         x_offset = x_offset.view(b, c, h_q, w_q, N)  # Reshape to (b, c, h_q, w_q, N)
-        
+
         return x_offset
 
-    
+
     #  Stacking resampled features in the row direction.
     @staticmethod
     def _reshape_x_offset(x_offset, num_param):
@@ -389,13 +281,13 @@ class LDConv(nn.Module):
         # using 1 × 1 Conv
         # x_offset = x_offset.permute(0,1,4,2,3), then, x_offset.view(b,c×num_param,h,w)  finally, Conv2d(c×num_param,c_out, kernel_size =1,stride=1,bias= False)
         # using the column conv as follow， then, Conv2d(inc, outc, kernel_size=(num_param, 1), stride=(num_param, 1), bias=bias)
-        
+
         x_offset = rearrange(x_offset, 'b c h w n -> b c (h n) w')
         return x_offset
-    
+
 def replace_conv_with_ldconv(module):
     """
-    Recursively replace all nn.Conv2d layers with kernel_size=3 
+    Recursively replace all nn.Conv2d layers with kernel_size=3
     by LDConv (keeping in/out channels, stride, bias).
     """
     for name, child in module.named_children():
@@ -405,7 +297,7 @@ def replace_conv_with_ldconv(module):
             new_layer = LDConv(
                 inc=child.in_channels,
                 outc=child.out_channels,
-                num_param=3,   
+                num_param=3,
                 stride=child.stride[0],
                 bias=(child.bias is not None)
             )
@@ -429,9 +321,9 @@ class asf_channel_att(nn.Module):
         super(asf_channel_att, self).__init__()
         kernel_size = int(abs((math.log(channel, 2) + b) / gamma))
         kernel_size = kernel_size if kernel_size % 2 else kernel_size + 1
-        
+
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.conv = nn.Conv1d(1, 1, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, bias=False) 
+        self.conv = nn.Conv1d(1, 1, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, bias=False)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
@@ -441,39 +333,39 @@ class asf_channel_att(nn.Module):
         y = self.conv(y).transpose(-1, -2).unsqueeze(-1)
         y = self.sigmoid(y)
         return x * y.expand_as(x)
-    
+
 class asf_local_att(nn.Module):
     def __init__(self, channel, reduction=16):
         super(asf_local_att, self).__init__()
         hidden_channel = max(channel // reduction, 1)
-        
+
         self.conv_1x1 = nn.Conv2d(in_channels=channel, out_channels=hidden_channel, kernel_size=1, stride=1, bias=False)
- 
+
         self.relu   = nn.ReLU()
         self.bn     = nn.BatchNorm2d(hidden_channel)
- 
+
         self.F_h = nn.Conv2d(in_channels=hidden_channel, out_channels=channel, kernel_size=1, stride=1, bias=False)
         self.F_w = nn.Conv2d(in_channels=hidden_channel, out_channels=channel, kernel_size=1, stride=1, bias=False)
- 
+
         self.sigmoid_h = nn.Sigmoid()
         self.sigmoid_w = nn.Sigmoid()
- 
+
     def forward(self, x):
         _, _, h, w = x.size()
-        
+
         x_h = torch.mean(x, dim = 3, keepdim = True).permute(0, 1, 3, 2)
         x_w = torch.mean(x, dim = 2, keepdim = True)
- 
+
         x_cat_conv_relu = self.relu(self.bn(self.conv_1x1(torch.cat((x_h, x_w), 3))))
- 
+
         x_cat_conv_split_h, x_cat_conv_split_w = x_cat_conv_relu.split([h, w], 3)
- 
+
         s_h = self.sigmoid_h(self.F_h(x_cat_conv_split_h.permute(0, 1, 3, 2)))
         s_w = self.sigmoid_w(self.F_w(x_cat_conv_split_w))
- 
+
         out = x * s_h.expand_as(x) * s_w.expand_as(x)
         return out
-    
+
 class asf_attention_model(nn.Module):
     # Concatenate a list of tensors along dimension
     def __init__(self, ch=256):
@@ -486,7 +378,7 @@ class asf_attention_model(nn.Module):
         x = input1 + input2
         x = self.local_att(x)
         return x
-    
+
 class ScalSeq(nn.Module):
     def __init__(self, inc, channel):
         super(ScalSeq, self).__init__()
@@ -517,11 +409,11 @@ class ScalSeq(nn.Module):
         x = self.pool_3d(act)
         x = torch.squeeze(x, 2)
         return x
-    
+
 def structure_loss(logits, mask):
     """
     loss function (ref: F3Net-AAAI-2020)
-    
+
     pred: logits without activation
     mask: binary mask {0, 1}
     """
@@ -544,9 +436,9 @@ class MultiScaleLapLoss(nn.Module):
         self.alpha = alpha     # weight for structure loss
         self.beta = beta       # weight for Lap pyramid loss
         self.num_levels = num_levels
-        
+
         # Your LaplacianPyramid class
-        self.lap_pyr = LaplacianPyramid(num_levels=num_levels, apply_clahe=False)
+        self.lap_pyr = LaplacianPyramid(num_levels=num_levels)
 
     def forward(self, logits, mask):
         # Resize mask if needed
@@ -592,7 +484,7 @@ class Conv(nn.Module):
     def forward_fuse(self, x):
         """Perform transposed convolution of 2D data."""
         return self.act(self.conv(x))
- 
+
 def get_shape(tensor):
     shape = tensor.shape
     if torch.onnx.is_in_onnx_export():
@@ -606,7 +498,7 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
     if p is None:
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
-   
+
 class GOLDYOLO_Attention(torch.nn.Module):
     def __init__(self, dim, key_dim = 2, num_heads = 2, attn_ratio=4):
         super().__init__()
@@ -617,25 +509,25 @@ class GOLDYOLO_Attention(torch.nn.Module):
         self.d = int(attn_ratio * key_dim)
         self.dh = int(attn_ratio * key_dim) * num_heads
         self.attn_ratio = attn_ratio
-        
+
         self.to_q = Conv(dim, nh_kd, 1, act=False)
         self.to_k = Conv(dim, nh_kd, 1, act=False)
         self.to_v = Conv(dim, self.dh, 1, act=False)
-        
+
         self.proj = torch.nn.Sequential(nn.ReLU6(), Conv(self.dh, dim, act=False))
-    
+
     def forward(self, x):  # x (B,N,C)
         B, C, H, W = get_shape(x)
-        
+
         qq = self.to_q(x).reshape(B, self.num_heads, self.key_dim, H * W).permute(0, 1, 3, 2)
         kk = self.to_k(x).reshape(B, self.num_heads, self.key_dim, H * W)
         vv = self.to_v(x).reshape(B, self.num_heads, self.d, H * W).permute(0, 1, 3, 2)
-        
+
         attn = torch.matmul(qq, kk)
         attn = attn.softmax(dim=-1)  # dim = k
-        
+
         xx = torch.matmul(attn, vv)
-        
+
         xx = xx.permute(0, 1, 3, 2).reshape(B, self.dh, H, W)
         xx = self.proj(xx)
         return xx
@@ -650,7 +542,7 @@ class Mlp(nn.Module):
         self.act = nn.ReLU6()
         self.fc2 = Conv(hidden_features, out_features, act=False)
         self.drop = nn.Dropout(drop)
-    
+
     def forward(self, x):
         x = self.fc1(x)
         x = self.dwconv(x)
@@ -680,30 +572,30 @@ def drop_path(x, drop_prob: float = 0., training: bool = False):
 class DropPath(nn.Module):
     """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
     """
-    
+
     def __init__(self, drop_prob=None):
         super(DropPath, self).__init__()
         self.drop_prob = drop_prob
-    
+
     def forward(self, x):
         return drop_path(x, self.drop_prob, self.training)
-    
+
 class top_Block(nn.Module):
-    
+
     def __init__(self, dim, key_dim = 4, num_heads =2, mlp_ratio=4., attn_ratio=2., drop=0.,
                  drop_path=0.):
         super().__init__()
         self.dim = dim
         self.num_heads = num_heads
         self.mlp_ratio = mlp_ratio
-        
+
         self.attn = GOLDYOLO_Attention(dim, key_dim=key_dim, num_heads=num_heads, attn_ratio=attn_ratio)
-        
+
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, drop=drop)
-    
+
     def forward(self, x1):
         x1 = x1 + self.drop_path(self.attn(x1))
         x1 = x1 + self.drop_path(self.mlp(x1))
@@ -732,7 +624,7 @@ class Conv2d_BN(torch.nn.Sequential):
         m.weight.data.copy_(w)
         m.bias.data.copy_(b)
         return m
-    
+
 class LKP(nn.Module):
     def __init__(self, dim, lks, sks, groups):
         super().__init__()
@@ -742,17 +634,31 @@ class LKP(nn.Module):
         self.cv3 = Conv2d_BN(dim // 2, dim // 2)
         self.cv4 = nn.Conv2d(dim // 2, sks ** 2 * dim // groups, kernel_size=1)
         self.norm = nn.GroupNorm(num_groups=dim // groups, num_channels=sks ** 2 * dim // groups)
-        
+
         self.sks = sks
         self.groups = groups
         self.dim = dim
-        
+
     def forward(self, x):
         x = self.act(self.cv3(self.cv2(self.act(self.cv1(x)))))
         w = self.norm(self.cv4(x))
         b, _, h, width = w.size()
         w = w.view(b, self.dim // self.groups, self.sks ** 2, h, width)
         return w
+
+
+def _resolve_groups(dim: int, preferred: int = 8) -> int:
+    """
+    Largest divisor of `dim` that is <= preferred. Falls back to 1 if `dim`
+    is small / awkward (e.g. an auto-scaled decoder width that isn't a
+    multiple of 8). Keeps LDSConv usable on arbitrary channel widths
+    instead of asserting and crashing.
+    """
+    g = min(preferred, dim)
+    while g > 1 and dim % g != 0:
+        g -= 1
+    return g
+
 
 class LDSConv(nn.Module):
     """
@@ -769,26 +675,44 @@ class LDSConv(nn.Module):
       4. weighted sum → collapse N samples → single C-dim feature vector
       5. BN + residual
 
+    cond_dim (new):
+        If set, the offset branch is conditioned on an auxiliary signal
+        (e.g. a Laplacian / high-frequency projection already computed
+        elsewhere in the network) in addition to `x` itself, via channel
+        concatenation. This lets the sampling positions be pulled toward
+        frequency-domain edge evidence instead of being inferred from `x`
+        alone. The LKP weighting branch still only sees `x`, since the
+        *content* being resampled is still the encoder/decoder feature,
+        not the conditioning signal.
+
     Args:
         dim       : channels in = channels out
         num_param : number of sampling points N (must be k² for integer k, default 9)
-        groups    : channel groups for LKP weight sharing (default 8)
+        groups    : channel groups for LKP weight sharing (default 8, auto-clamped
+                    to a divisor of `dim` if `dim` isn't a multiple of `groups`)
         lks       : large-kernel size inside LKP (default 7)
+        cond_dim  : channel width of an optional auxiliary conditioning tensor
+                    passed to forward() as `cond`. None disables conditioning.
     """
 
-    def __init__(self, dim: int, num_param: int = 9, groups: int = 8, lks: int = 7):
+    def __init__(self, dim: int, num_param: int = 9, groups: int = 8, lks: int = 7,
+                 cond_dim: int = None):
         super().__init__()
         sks = int(round(math.sqrt(num_param)))
         assert sks * sks == num_param, "num_param must be a perfect square (4, 9, 16, …)"
+
+        groups = _resolve_groups(dim, groups)
         assert dim % groups == 0, "dim must be divisible by groups"
 
         self.dim       = dim
         self.num_param = num_param
         self.groups    = groups
         self.wc        = dim // groups   # weight channels (shared across groups)
+        self.cond_dim  = cond_dim
 
         # ── LDConv branch: offset prediction ─────────────────────────────────
-        self.offset_conv = nn.Conv2d(dim, 2 * num_param, kernel_size=3, padding=1)
+        offset_in_ch = dim + (cond_dim if cond_dim is not None else 0)
+        self.offset_conv = nn.Conv2d(offset_in_ch, 2 * num_param, kernel_size=3, padding=1)
         nn.init.zeros_(self.offset_conv.weight)
         nn.init.zeros_(self.offset_conv.bias)
         # Reduce gradient magnitude for the offset branch (matches LDConv paper §3)
@@ -895,22 +819,37 @@ class LDSConv(nn.Module):
 
     # ── forward ───────────────────────────────────────────────────────────────
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # 1. Predict deformed sampling positions
-        offset = self.offset_conv(x)                     # [B, 2N, H, W]
-        p      = self._absolute_positions(offset)        # [B, 2N, H, W]
+    def forward(self, x: torch.Tensor, cond: torch.Tensor = None) -> torch.Tensor:
+        """
+        Args:
+            x    : [B, dim, H, W]  feature to resample/refine.
+            cond : [B, cond_dim, H, W]  optional auxiliary signal (e.g. a
+                   projected Laplacian level) used only to help predict
+                   *where* to sample. Required iff cond_dim was set.
+        """
+        if self.cond_dim is not None:
+            assert cond is not None, "LDSConv was built with cond_dim set; forward() needs `cond`"
+            if cond.shape[2:] != x.shape[2:]:
+                cond = F.interpolate(cond, size=x.shape[2:], mode='bilinear', align_corners=False)
+            offset_in = torch.cat([x, cond], dim=1)
+        else:
+            offset_in = x
 
-        # 2. Sample features at the warped positions
-        feats = self._bilinear_sample(x, p)              # [B, C, H, W, N]
-        feats = feats.permute(0, 1, 4, 2, 3)            # [B, C, N, H, W]
+        # 1. Predict deformed sampling positions
+        offset = self.offset_conv(offset_in)              # [B, 2N, H, W]
+        p      = self._absolute_positions(offset)         # [B, 2N, H, W]
+
+        # 2. Sample features at the warped positions (content always comes from x)
+        feats = self._bilinear_sample(x, p)               # [B, C, H, W, N]
+        feats = feats.permute(0, 1, 4, 2, 3)             # [B, C, N, H, W]
 
         # 3. Spatially-adaptive kernel weights from LKP
-        w = self.lkp(x)                                  # [B, wc, N, H, W]
+        w = self.lkp(x)                                   # [B, wc, N, H, W]
 
         # 4. Group-wise weighted sum
         #    Channel ci samples from weight row (ci % wc), matching SKA's convention.
-        w   = w.repeat(1, self.groups, 1, 1, 1)         # [B, C, N, H, W]
-        out = (feats * w).sum(dim=2)                     # [B, C, H, W]
+        w   = w.repeat(1, self.groups, 1, 1, 1)          # [B, C, N, H, W]
+        out = (feats * w).sum(dim=2)                      # [B, C, H, W]
 
         # 5. BN + residual
         return self.bn(out) + x
