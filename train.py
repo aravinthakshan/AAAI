@@ -213,7 +213,7 @@ if __name__ == '__main__':
         optimizer = torch.optim.SGD(model.parameters(),
                                     lr=cfg.learning_rate,
                                     momentum=0.9,
-                                    weight_decay=cfg.weight_decay)
+                                   weight_decay=cfg.weight_decay)
     elif args.optimizer == 'soap':
         optimizer = SOAP(model.parameters(), lr = 3e-3, betas=(.95, .95), weight_decay=.01, precondition_frequency=10)
 

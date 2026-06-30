@@ -23,12 +23,48 @@ Fix 3 — StarDeBlock: use GELU instead of ReLU6 for the star activation.
 Fix 4 — StarNetEncoder: pretrained weight loading with head/norm stripping.
          Without this, starnet_s1 starts from random init while EfficientNet-B0
          starts from ImageNet — the single biggest source of the metric gap.
+
+------------------------------------------------------------------
+LDSConv integration (new)
+------------------------------------------------------------------
+Two of the static 7×7 depthwise context convs are now replaced with
+LDSConv (deformable sampling + LKP/SKA spatially-adaptive weighting,
+see Model/lap_utils.py). Rationale:
+
+  • StarLapInjection.dwconv → LDSConv, conditioned on the projected
+    Laplacian level (`cond=lap`). The whole point of this block is to
+    inject high-frequency boundary detail; a fixed square receptive
+    field works against that when camouflaged-object edges are thin
+    and rarely axis-aligned. Conditioning the offset prediction on the
+    Laplacian signal lets sampling positions bend toward edge evidence
+    that's already been computed, instead of inferring offsets from
+    `ctx` alone.
+
+  • StarDeBlock.low_dw → LDSConv (unconditioned). This sits in the
+    *highest-resolution* decoder branch (the one that ultimately
+    produces out1, the finest prediction before the final 4× upsample),
+    where boundary precision matters most and channel width is
+    smallest — i.e. where the extra compute is cheapest and most
+    justified.
+
+  Deliberately NOT applied to ffm4/out4 or deconv3 (lowest-resolution,
+  highest-channel stage): those stages are about coarse localization,
+  not fine boundary shape, so the LDSConv overhead isn't justified
+  there relative to its cost.
+
+  Caveat: LDSConv's offset_conv is zero-initialized (per the LDConv
+  paper's convention), and StarDeBlock.cross_g already zero-inits its
+  output BN gamma (Fix 2). Stacking two independently zero-initialized
+  branches in the same forward pass can slow early convergence more
+  than either fix alone — watch loss curves over the first few hundred
+  iterations if you enable this in the decoder.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from Model.Starnet import Block, ConvBN
+from Model.lap_utils import LDSConv
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -78,20 +114,30 @@ def load_starnet_pretrained(encoder, variant: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# StarLapInjection  (unchanged — performs well)
+# StarLapInjection  (ctx branch upgraded to Laplacian-conditioned LDSConv)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class StarLapInjection(nn.Module):
     """
     Cross-modal star gate: encoder context selects which Laplacian details survive.
     act(f1(ctx)) ⊙ f2(lap)  +  residual skip
+
+    `ctx` used to come from a fixed 7×7 depthwise ConvBN over the encoder
+    features alone. It's now an LDSConv whose offset prediction also sees
+    the projected Laplacian level (`lap`), so the sampling grid can deform
+    toward the same high-frequency edges the block is trying to inject —
+    instead of always pooling over a rigid square window.
+
+    Set `use_ldsconv=False` to fall back to the original static depthwise
+    conv (useful for ablation).
     """
-    def __init__(self, encoder_channels: int, lap_channels: int = 3, mlp_ratio: int = 3):
+    def __init__(self, encoder_channels: int, lap_channels: int = 3, mlp_ratio: int = 3,
+                 use_ldsconv: bool = True, lds_num_param: int = 9, lds_groups: int = 8):
         super().__init__()
         C = encoder_channels
         H = mlp_ratio * C
 
-        self.dwconv  = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=True)
+        self.use_ldsconv = use_ldsconv
         self.lap_proj = nn.Sequential(
             nn.Conv2d(lap_channels, C // 2, 3, padding=1, bias=False),
             nn.BatchNorm2d(C // 2),
@@ -99,6 +145,14 @@ class StarLapInjection(nn.Module):
             nn.Conv2d(C // 2, C, 1, bias=False),
             nn.BatchNorm2d(C),
         )
+
+        if use_ldsconv:
+            # Offset prediction conditioned on the Laplacian projection (C channels)
+            self.dwconv = LDSConv(C, num_param=lds_num_param, groups=lds_groups,
+                                   lks=7, cond_dim=C)
+        else:
+            self.dwconv = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=True)
+
         self.f1 = ConvBN(C, H, 1, with_bn=False)
         self.f2 = ConvBN(C, H, 1, with_bn=False)
         self.g  = ConvBN(H, C, 1, with_bn=True)
@@ -112,7 +166,12 @@ class StarLapInjection(nn.Module):
                 mode='bilinear', align_corners=False,
             )
         lap = self.lap_proj(laplacian_level)
-        ctx = self.dwconv(encoder_features)
+
+        if self.use_ldsconv:
+            ctx = self.dwconv(encoder_features, cond=lap)
+        else:
+            ctx = self.dwconv(encoder_features)
+
         star = self.act(self.f1(ctx)) * self.f2(lap)
         star = self.dwconv2(self.g(star))
         return encoder_features + star
@@ -128,7 +187,7 @@ class StarFFM(nn.Module):
 
     Fix 1 — two-stage frequency projection:
         Original: 96 → C  (single 1×1, up to 12× reduction when C=8)
-        Fixed:    96 → mid → C  where mid = max(4*C, 32)
+        Fixed:    96 → mid → C  where mid is clamped to be at least 4× C.
 
     At C=8:  96 → 32 → 8  (two manageable steps, 3× then 4×)
     At C=48: 96 → 96 → 48 (first step is identity-like, no info loss)
@@ -192,7 +251,8 @@ class StarFFM(nn.Module):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# StarDeBlock  (Fix 2 + 3 applied: zero-init cross branch + GELU)
+# StarDeBlock  (Fix 2 + 3 applied: zero-init cross branch + GELU;
+#               low branch upgraded to LDSConv)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class StarDeBlock(nn.Module):
@@ -207,11 +267,26 @@ class StarDeBlock(nn.Module):
         when the multiplicative gate hasn't learned yet.
 
     Fix 3 — GELU throughout (no ReLU6 ceiling on gate signals).
+
+    LDSConv on the low branch (new):
+        `low_dw` used to be a static 7×7 depthwise conv applied right
+        after the channel-mixing `low_g`. It's now an (unconditioned)
+        LDSConv, so the spatial sampling for the finest-detail branch
+        can deform toward thin/irregular boundary shapes instead of
+        pooling over a fixed square window. Only applied here — not in
+        deconv3, the lowest-res / highest-channel stage — to keep the
+        added compute where boundary precision actually matters most.
+
+        Set `use_ldsconv=False` to fall back to the original static
+        depthwise conv (useful for ablation / compute-constrained runs).
     """
-    def __init__(self, in_channels: int, out_channels: int, mlp_ratio: int = 3):
+    def __init__(self, in_channels: int, out_channels: int, mlp_ratio: int = 3,
+                 use_ldsconv: bool = True, lds_num_param: int = 9, lds_groups: int = 8):
         super().__init__()
         C = out_channels
         H = mlp_ratio * C
+
+        self.use_ldsconv = use_ldsconv
 
         self.proj = (
             nn.Conv2d(in_channels, C, 1, bias=True)
@@ -223,7 +298,10 @@ class StarDeBlock(nn.Module):
         self.low_f1 = ConvBN(C, H, 1, with_bn=False)
         self.low_f2 = ConvBN(C, H, 1, with_bn=False)
         self.low_g  = ConvBN(H, C, 1, with_bn=True)
-        self.low_dw = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=False)
+        if use_ldsconv:
+            self.low_dw = LDSConv(C, num_param=lds_num_param, groups=lds_groups, lks=7)
+        else:
+            self.low_dw = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=False)
 
         # Mid branch
         self.mid_blocks = nn.ModuleList([Block(C, mlp_ratio) for _ in range(2)])
@@ -248,7 +326,10 @@ class StarDeBlock(nn.Module):
         x   = self.proj(x)
         ctx = self.dwconv(x) + x
 
-        low = self.low_dw(self.low_g(self.act(self.low_f1(ctx)) * self.low_f2(ctx)))
+        # Channel-mix (low_g) always runs first; low_dw is then either the
+        # original static depthwise conv or the deformable LDSConv refine step.
+        low = self.low_g(self.act(self.low_f1(ctx)) * self.low_f2(ctx))
+        low = self.low_dw(low)
 
         mid = ctx
         for blk in self.mid_blocks:

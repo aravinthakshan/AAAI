@@ -708,3 +708,209 @@ class top_Block(nn.Module):
         x1 = x1 + self.drop_path(self.attn(x1))
         x1 = x1 + self.drop_path(self.mlp(x1))
         return x1
+
+class Conv2d_BN(torch.nn.Sequential):
+    def __init__(self, a, b, ks=1, stride=1, pad=0, dilation=1,
+                 groups=1, bn_weight_init=1):
+        super().__init__()
+        self.add_module('c', torch.nn.Conv2d(
+            a, b, ks, stride, pad, dilation, groups, bias=False))
+        self.add_module('bn', torch.nn.BatchNorm2d(b))
+        torch.nn.init.constant_(self.bn.weight, bn_weight_init)
+        torch.nn.init.constant_(self.bn.bias, 0)
+
+    @torch.no_grad()
+    def fuse(self):
+        c, bn = self._modules.values()
+        w = bn.weight / (bn.running_var + bn.eps)**0.5
+        w = c.weight * w[:, None, None, None]
+        b = bn.bias - bn.running_mean * bn.weight / \
+            (bn.running_var + bn.eps)**0.5
+        m = torch.nn.Conv2d(w.size(1) * self.c.groups, w.size(
+            0), w.shape[2:], stride=self.c.stride, padding=self.c.padding, dilation=self.c.dilation, groups=self.c.groups,
+            device=c.weight.device)
+        m.weight.data.copy_(w)
+        m.bias.data.copy_(b)
+        return m
+    
+class LKP(nn.Module):
+    def __init__(self, dim, lks, sks, groups):
+        super().__init__()
+        self.cv1 = Conv2d_BN(dim, dim // 2)
+        self.act = nn.ReLU()
+        self.cv2 = Conv2d_BN(dim // 2, dim // 2, ks=lks, pad=(lks - 1) // 2, groups=dim // 2)
+        self.cv3 = Conv2d_BN(dim // 2, dim // 2)
+        self.cv4 = nn.Conv2d(dim // 2, sks ** 2 * dim // groups, kernel_size=1)
+        self.norm = nn.GroupNorm(num_groups=dim // groups, num_channels=sks ** 2 * dim // groups)
+        
+        self.sks = sks
+        self.groups = groups
+        self.dim = dim
+        
+    def forward(self, x):
+        x = self.act(self.cv3(self.cv2(self.act(self.cv1(x)))))
+        w = self.norm(self.cv4(x))
+        b, _, h, width = w.size()
+        w = w.view(b, self.dim // self.groups, self.sks ** 2, h, width)
+        return w
+
+class LDSConv(nn.Module):
+    """
+    LDSConv — Learnable Deformable Spatially-adaptive Convolution.
+
+    Combines two ideas:
+      • LDConv  : learns *where* to sample  (deformable bilinear positions)
+      • LSConv  : learns *how* to weight     (spatially-varying kernel weights via LKP)
+
+    For every output location (h, w):
+      1. offset_conv  → 2·N displacement deltas on top of a centred base grid
+      2. bilinear     → N feature vectors gathered at the warped positions
+      3. LKP          → N spatially-varying weights per channel group
+      4. weighted sum → collapse N samples → single C-dim feature vector
+      5. BN + residual
+
+    Args:
+        dim       : channels in = channels out
+        num_param : number of sampling points N (must be k² for integer k, default 9)
+        groups    : channel groups for LKP weight sharing (default 8)
+        lks       : large-kernel size inside LKP (default 7)
+    """
+
+    def __init__(self, dim: int, num_param: int = 9, groups: int = 8, lks: int = 7):
+        super().__init__()
+        sks = int(round(math.sqrt(num_param)))
+        assert sks * sks == num_param, "num_param must be a perfect square (4, 9, 16, …)"
+        assert dim % groups == 0, "dim must be divisible by groups"
+
+        self.dim       = dim
+        self.num_param = num_param
+        self.groups    = groups
+        self.wc        = dim // groups   # weight channels (shared across groups)
+
+        # ── LDConv branch: offset prediction ─────────────────────────────────
+        self.offset_conv = nn.Conv2d(dim, 2 * num_param, kernel_size=3, padding=1)
+        nn.init.zeros_(self.offset_conv.weight)
+        nn.init.zeros_(self.offset_conv.bias)
+        # Reduce gradient magnitude for the offset branch (matches LDConv paper §3)
+        self.offset_conv.register_full_backward_hook(self._slow_lr)
+
+        # ── LSConv branch: adaptive weight prediction (LKP) ──────────────────
+        self.lkp = LKP(dim, lks=lks, sks=sks, groups=groups)
+        # LKP output: [B, dim//groups, num_param, H, W]
+
+        self.bn = nn.BatchNorm2d(dim)
+
+        # Centred base grid (mirrors SKA's padding convention):
+        # for sks=3 → offsets {-1, 0, +1} in both axes
+        self.register_buffer("base_grid", self._make_base_grid(sks))
+
+    # ── internal helpers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _slow_lr(module, grad_in, grad_out):
+        """Scale down offset-branch gradients to stabilise early training."""
+        return tuple(g * 0.1 if g is not None else g for g in grad_in)
+
+    @staticmethod
+    def _make_base_grid(sks: int) -> torch.Tensor:
+        """Centred k×k sampling grid, shape [1, 2k², 1, 1]."""
+        pad = sks // 2
+        rs, cs = torch.meshgrid(
+            torch.arange(-pad, -pad + sks, dtype=torch.float32),
+            torch.arange(-pad, -pad + sks, dtype=torch.float32),
+            indexing="ij",
+        )
+        return torch.cat([rs.flatten(), cs.flatten()]).view(1, -1, 1, 1)
+
+    def _absolute_positions(self, offset: torch.Tensor) -> torch.Tensor:
+        """
+        Convert predicted offsets to absolute sampling positions.
+
+        offset : [B, 2N, H, W]
+        returns : [B, 2N, H, W]  (row coords in first N, col coords in last N)
+        """
+        N, H, W = self.num_param, offset.size(2), offset.size(3)
+        dev = offset.device
+        p0_r = torch.arange(H, device=dev, dtype=offset.dtype).view(1, 1, H, 1).expand(1, N, H, W)
+        p0_c = torch.arange(W, device=dev, dtype=offset.dtype).view(1, 1, 1, W).expand(1, N, H, W)
+        p0   = torch.cat([p0_r, p0_c], dim=1)          # [1, 2N, H, W]
+        return p0 + self.base_grid.to(offset.dtype) + offset
+
+    @staticmethod
+    def _gather(x: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+        """
+        Integer-indexed gather of x at positions q.
+
+        x : [B, C, H, W]
+        q : [B, H, W, 2N]  long,  already clamped to valid range
+        returns [B, C, H, W, N]
+        """
+        B, C, H, W = x.shape
+        N = q.shape[-1] // 2
+        idx = q[..., :N] * W + q[..., N:]              # [B, H, W, N]  flat indices
+        idx = (idx.unsqueeze(1)
+                  .expand(B, C, H, W, N)
+                  .reshape(B, C, -1))                   # [B, C, H·W·N]
+        out = x.reshape(B, C, -1).gather(-1, idx)
+        return out.view(B, C, H, W, N)
+
+    def _bilinear_sample(self, x: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
+        """
+        Differentiable bilinear sampling at continuous positions p.
+
+        p : [B, 2N, H, W]  (rows in first N channels, cols in last N)
+        returns [B, C, H, W, N]
+        """
+        B, C, H, W = x.shape
+        N = p.size(1) // 2
+        p = p.permute(0, 2, 3, 1)                       # [B, H, W, 2N]
+
+        q_tl = p.detach().floor().long()                 # top-left  corner
+        q_br = q_tl + 1                                  # bot-right corner
+
+        def _clamp(q):
+            return torch.cat([
+                q[..., :N].clamp(0, H - 1),
+                q[..., N:].clamp(0, W - 1),
+            ], dim=-1)
+
+        q_tl = _clamp(q_tl);  q_br = _clamp(q_br)
+        q_bl = torch.cat([q_tl[..., :N], q_br[..., N:]], dim=-1)  # bot-left
+        q_tr = torch.cat([q_br[..., :N], q_tl[..., N:]], dim=-1)  # top-right
+
+        pr = p[..., :N].clamp(0, H - 1)                 # continuous row  [B,H,W,N]
+        pc = p[..., N:].clamp(0, W - 1)                 # continuous col
+
+        # Bilinear weights (same sign convention as LDConv)
+        g_tl = (1 + q_tl[..., :N].float() - pr) * (1 + q_tl[..., N:].float() - pc)
+        g_br = (1 - q_br[..., :N].float() + pr) * (1 - q_br[..., N:].float() + pc)
+        g_bl = (1 + q_bl[..., :N].float() - pr) * (1 - q_bl[..., N:].float() + pc)
+        g_tr = (1 - q_tr[..., :N].float() + pr) * (1 + q_tr[..., N:].float() - pc)
+
+        f = lambda q: self._gather(x, q)                # each [B, C, H, W, N]
+        return (g_tl.unsqueeze(1) * f(q_tl) +
+                g_br.unsqueeze(1) * f(q_br) +
+                g_bl.unsqueeze(1) * f(q_bl) +
+                g_tr.unsqueeze(1) * f(q_tr))
+
+    # ── forward ───────────────────────────────────────────────────────────────
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # 1. Predict deformed sampling positions
+        offset = self.offset_conv(x)                     # [B, 2N, H, W]
+        p      = self._absolute_positions(offset)        # [B, 2N, H, W]
+
+        # 2. Sample features at the warped positions
+        feats = self._bilinear_sample(x, p)              # [B, C, H, W, N]
+        feats = feats.permute(0, 1, 4, 2, 3)            # [B, C, N, H, W]
+
+        # 3. Spatially-adaptive kernel weights from LKP
+        w = self.lkp(x)                                  # [B, wc, N, H, W]
+
+        # 4. Group-wise weighted sum
+        #    Channel ci samples from weight row (ci % wc), matching SKA's convention.
+        w   = w.repeat(1, self.groups, 1, 1, 1)         # [B, C, N, H, W]
+        out = (feats * w).sum(dim=2)                     # [B, C, H, W]
+
+        # 5. BN + residual
+        return self.bn(out) + x

@@ -1,208 +1,342 @@
 """
-LaFinet.py  — backbone-aware channel scaling + controlled ablation
-----------------------------------------------------------------------
-Key change: LaplacianFINet now accepts channels=None, which triggers
-automatic scaling based on the backbone's stage channel widths.
+star_utils.py  — fixes for low weighted-Fβ with starnet_s1
+------------------------------------------------------------------
+Three targeted fixes applied:
 
-For starnet_s1  [24, 48, 96, 192]  → auto channels = (24, 48, 96, 192)
-For efficientb0 [stage-dependent]  → auto channels = (derived from backbone)
+Fix 1 — StarFFM: two-stage frequency projection instead of 96 → C direct.
+         The 12× squeeze (96 → 8) in a single 1×1 destroys boundary detail
+         before the star gate fires.  We now go 96 → mid → C where mid is
+         clamped to be at least 4× C, preserving frequency information.
 
-This prevents the aggressive bottleneck (192 → 48 → 8) that was the
-primary cause of low weighted-Fβ with the larger backbone.
+Fix 2 — StarDeBlock: zero-init the cross-scale branch output BN gamma.
+         The cross gate (low ⊙ top) starts at near-zero output, so early
+         training relies on the well-formed low + mid residual paths.
+         As training progresses the cross branch activates gradually —
+         the same trick used in ResNet "res-zero" / NF-Nets.
 
-Ablation flags let you isolate which change is responsible for any
-metric difference: backbone, star modules, or channel width.
+Fix 3 — StarDeBlock: use GELU instead of ReLU6 for the star activation.
+         ReLU6's ceiling clips gradients when f1 output > 6 (common after BN
+         on early layers).  GELU has no ceiling and passes larger gradients
+         through the gate path, which matters most for the thin boundary
+         features that drive weighted-Fβ.
+
+Fix 4 — StarNetEncoder: pretrained weight loading with head/norm stripping.
+         Without this, starnet_s1 starts from random init while EfficientNet-B0
+         starts from ImageNet — the single biggest source of the metric gap.
+
+------------------------------------------------------------------
+LDSConv integration (new)
+------------------------------------------------------------------
+Two of the static 7×7 depthwise context convs are now replaced with
+LDSConv (deformable sampling + LKP/SKA spatially-adaptive weighting,
+see Model/lap_utils.py). Rationale:
+
+  • StarLapInjection.dwconv → LDSConv, conditioned on the projected
+    Laplacian level (`cond=lap`). The whole point of this block is to
+    inject high-frequency boundary detail; a fixed square receptive
+    field works against that when camouflaged-object edges are thin
+    and rarely axis-aligned. Conditioning the offset prediction on the
+    Laplacian signal lets sampling positions bend toward edge evidence
+    that's already been computed, instead of inferring offsets from
+    `ctx` alone.
+
+  • StarDeBlock.low_dw → LDSConv (unconditioned). This sits in the
+    *highest-resolution* decoder branch (the one that ultimately
+    produces out1, the finest prediction before the final 4× upsample),
+    where boundary precision matters most and channel width is
+    smallest — i.e. where the extra compute is cheapest and most
+    justified.
+
+  Deliberately NOT applied to ffm4/out4 or deconv3 (lowest-resolution,
+  highest-channel stage): those stages are about coarse localization,
+  not fine boundary shape, so the LDSConv overhead isn't justified
+  there relative to its cost.
+
+  Caveat: LDSConv's offset_conv is zero-initialized (per the LDConv
+  paper's convention), and StarDeBlock.cross_g already zero-inits its
+  output BN gamma (Fix 2). Stacking two independently zero-initialized
+  branches in the same forward pass can slow early convergence more
+  than either fix alone — watch loss curves over the first few hundred
+  iterations if you enable this in the decoder.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from Model.EfficientNet   import EfficientNet_B0
-from Model.TinyNet        import TinyNetA
-from Model.Starnet        import StarNetEncoder, Block
-from Model.Demonet        import DemoNetEncoder
-from Model.Modules        import ConvBNGeLU, ConvBN
-from Model.lap_utils      import (
-    LaplacianPyramid, LaplacianInjectionBlock,
-    asf_attention_model, ScalSeq,
-)
-from Model.star_utils import (
-    StarLapInjection, StarFFM, StarDeBlock, load_starnet_pretrained,
-)
-
-# Original modules kept for ablation
-try:
-    from Model.Replacements import FSM_FFM
-except ImportError:
-    FSM_FFM = None   # may not exist in all setups
-
-try:
-    from Model.lap_utils import DeBlock   # if kept in lap_utils
-except ImportError:
-    DeBlock = None
+from Model.Starnet import Block, ConvBN
+from Model.lap_utils import LDSConv
 
 
-def build_lafinet_backbone(backbone: str, pretrained: bool = False):
-    if backbone == 'efficientb0':
-        return EfficientNet_B0()
-    if backbone == 'tinynet-a':
-        return TinyNetA()
-    if backbone.startswith('starnet_'):
-        enc = StarNetEncoder(variant=backbone)
-        if pretrained:
-            load_starnet_pretrained(enc, backbone)   # Fix 4
-        return enc
-    if backbone.startswith('demonet_'):
-        parts = backbone.split('_')
-        if len(parts) != 4 or not parts[1].startswith('d') or not parts[2].startswith('w'):
-            raise ValueError(f"Invalid DemoNet backbone name: {backbone}")
-        return DemoNetEncoder(depth=int(parts[1][1:]), dim=int(parts[2][1:]), mode=parts[3])
-    raise ValueError(f"Unsupported backbone: {backbone}")
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: load pretrained StarNet weights into an encoder
+# ─────────────────────────────────────────────────────────────────────────────
+
+model_urls = {
+    "starnet_s1":   "https://github.com/ma-xu/Rewrite-the-Stars/releases/download/checkpoints_v1/starnet_s1.pth.tar",
+    "starnet_s2":   "https://github.com/ma-xu/Rewrite-the-Stars/releases/download/checkpoints_v1/starnet_s2.pth.tar",
+    "starnet_s3":   "https://github.com/ma-xu/Rewrite-the-Stars/releases/download/checkpoints_v1/starnet_s3.pth.tar",
+    "starnet_s4":   "https://github.com/ma-xu/Rewrite-the-Stars/releases/download/checkpoints_v1/starnet_s4.pth.tar",
+}
 
 
-def _auto_channels(stage_channels: list, scale: float = 1.0):
+def load_starnet_pretrained(encoder, variant: str):
     """
-    Derive decoder channel widths directly from backbone stage widths.
-    stage_channels = encoder.get_stage_channels() → [C0, C1, C2, C3, C4]
-    We use stages 1–4 (indices 1..4) for the four decoder widths.
-    scale < 1.0 reduces if you need fewer params.
+    Download the classification checkpoint and copy stem+stages weights.
+    The head (norm, avgpool, linear) is discarded — only the feature extractor
+    layers that exist in StarNetEncoder are loaded.
+
+    Usage:
+        enc = StarNetEncoder(variant='starnet_s1')
+        load_starnet_pretrained(enc, 'starnet_s1')
     """
-    return tuple(max(8, int(c * scale)) for c in stage_channels[1:])
+    if variant not in model_urls:
+        raise ValueError(f"No pretrained URL for {variant}. Available: {list(model_urls)}")
+
+    url = model_urls[variant]
+    checkpoint = torch.hub.load_state_dict_from_url(url, map_location="cpu")
+
+    # Checkpoint may be nested under 'state_dict' or 'model'
+    sd = checkpoint.get("state_dict", checkpoint.get("model", checkpoint))
+
+    # Strip keys that don't exist in StarNetEncoder (head, norm, avgpool)
+    encoder_sd = encoder.state_dict()
+    filtered = {
+        k: v for k, v in sd.items()
+        if k in encoder_sd and v.shape == encoder_sd[k].shape
+    }
+    missing = [k for k in encoder_sd if k not in filtered]
+    unexpected = [k for k in sd if k not in encoder_sd]
+
+    encoder.load_state_dict(filtered, strict=False)
+    print(f"[StarNet pretrained] loaded {len(filtered)}/{len(encoder_sd)} keys  "
+          f"| missing {len(missing)}  | unexpected {len(unexpected)}")
+    return encoder
 
 
-class LaplacianFINet(nn.Module):
+# ─────────────────────────────────────────────────────────────────────────────
+# StarLapInjection  (ctx branch upgraded to Laplacian-conditioned LDSConv)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class StarLapInjection(nn.Module):
     """
-    channels=None  → auto-scale decoder widths to backbone capacity (recommended)
-    channels=tuple → explicit widths (original behaviour, useful for ablation)
+    Cross-modal star gate: encoder context selects which Laplacian details survive.
+    act(f1(ctx)) ⊙ f2(lap)  +  residual skip
 
-    use_star=True  → StarLapInjection + StarFFM + StarDeBlock  (new)
-    use_star=False → LaplacianInjectionBlock + FSM_FFM + DeBlock (original)
+    `ctx` used to come from a fixed 7×7 depthwise ConvBN over the encoder
+    features alone. It's now an LDSConv whose offset prediction also sees
+    the projected Laplacian level (`lap`), so the sampling grid can deform
+    toward the same high-frequency edges the block is trying to inject —
+    instead of always pooling over a rigid square window.
 
-    pretrained=True → load ImageNet weights for StarNet backbones
+    Set `use_ldsconv=False` to fall back to the original static depthwise
+    conv (useful for ablation).
     """
-
-    def __init__(
-        self,
-        backbone:    str   = 'starnet_s1',
-        channels:    tuple = None,
-        use_star:    bool  = True,
-        pretrained:  bool  = False,
-        channel_scale: float = 1.0,
-    ):
+    def __init__(self, encoder_channels: int, lap_channels: int = 3, mlp_ratio: int = 3,
+                 use_ldsconv: bool = True, lds_num_param: int = 9, lds_groups: int = 8):
         super().__init__()
+        C = encoder_channels
+        H = mlp_ratio * C
 
-        self.encoder = build_lafinet_backbone(backbone, pretrained=pretrained)
-        stage_ch = self.encoder.get_stage_channels()  # [C0, C1, C2, C3, C4]
+        self.use_ldsconv = use_ldsconv
+        self.lap_proj = nn.Sequential(
+            nn.Conv2d(lap_channels, C // 2, 3, padding=1, bias=False),
+            nn.BatchNorm2d(C // 2),
+            nn.GELU(),
+            nn.Conv2d(C // 2, C, 1, bias=False),
+            nn.BatchNorm2d(C),
+        )
 
-        # ── Channel widths ────────────────────────────────────────────────────
-        if channels is None:
-            channels = _auto_channels(stage_ch, scale=channel_scale)
-            print(f"[LaFINet] auto channels {channels}  (backbone stages {stage_ch})")
-        self.channels = channels
-
-        # ── Laplacian pyramid ─────────────────────────────────────────────────
-        self.laplacian_pyramid = LaplacianPyramid(num_levels=3)
-
-        # ── Injection site (star or original) ────────────────────────────────
-        if use_star:
-            self.lap_injection1 = StarLapInjection(stage_ch[1], 3)
-            self.lap_injection2 = StarLapInjection(stage_ch[2], 3)
-            self.lap_injection3 = StarLapInjection(stage_ch[3], 3)
+        if use_ldsconv:
+            # Offset prediction conditioned on the Laplacian projection (C channels)
+            self.dwconv = LDSConv(C, num_param=lds_num_param, groups=lds_groups,
+                                   lks=7, cond_dim=C)
         else:
-            self.lap_injection1 = LaplacianInjectionBlock(stage_ch[1], 3, stage_ch[1])
-            self.lap_injection2 = LaplacianInjectionBlock(stage_ch[2], 3, stage_ch[2])
-            self.lap_injection3 = LaplacianInjectionBlock(stage_ch[3], 3, stage_ch[3])
+            self.dwconv = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=True)
 
-        # ── Channel reduction ─────────────────────────────────────────────────
-        self.re_conv1 = ConvBNGeLU(stage_ch[1], channels[0], kernel_size=1)
-        self.re_conv2 = ConvBNGeLU(stage_ch[2], channels[1], kernel_size=1)
-        self.re_conv3 = ConvBNGeLU(stage_ch[3], channels[2], kernel_size=1)
-        self.re_conv4 = ConvBNGeLU(stage_ch[4], channels[3], kernel_size=1)
+        self.f1 = ConvBN(C, H, 1, with_bn=False)
+        self.f2 = ConvBN(C, H, 1, with_bn=False)
+        self.g  = ConvBN(H, C, 1, with_bn=True)
+        self.dwconv2 = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=False)
+        self.act = nn.GELU()   # fix 3: GELU instead of ReLU6
 
-        # ── Frequency fusion (star or original) ───────────────────────────────
-        if use_star:
-            self.ffm1 = StarFFM(channels[0], freq_channels=96)
-            self.ffm2 = StarFFM(channels[1], freq_channels=96)
-            self.ffm3 = StarFFM(channels[2], freq_channels=96)
-            self.ffm4 = StarFFM(channels[3], freq_channels=96)
+    def forward(self, encoder_features: torch.Tensor, laplacian_level: torch.Tensor):
+        if laplacian_level.shape[2:] != encoder_features.shape[2:]:
+            laplacian_level = F.interpolate(
+                laplacian_level, size=encoder_features.shape[2:],
+                mode='bilinear', align_corners=False,
+            )
+        lap = self.lap_proj(laplacian_level)
+
+        if self.use_ldsconv:
+            ctx = self.dwconv(encoder_features, cond=lap)
         else:
-            assert FSM_FFM is not None, "FSM_FFM not available"
-            self.ffm1 = FSM_FFM(channels[0])
-            self.ffm2 = FSM_FFM(channels[1])
-            self.ffm3 = FSM_FFM(channels[2])
-            self.ffm4 = FSM_FFM(channels[3])
+            ctx = self.dwconv(encoder_features)
 
-        self.gelu = nn.GELU()
+        star = self.act(self.f1(ctx)) * self.f2(lap)
+        star = self.dwconv2(self.g(star))
+        return encoder_features + star
 
-        # ── Decoder (star or original) ────────────────────────────────────────
-        if use_star:
-            self.deconv3 = StarDeBlock(channels[3], channels[2])
-            self.deconv2 = StarDeBlock(channels[2], channels[1])
-            self.deconv1 = StarDeBlock(channels[1], channels[0])
+
+# ─────────────────────────────────────────────────────────────────────────────
+# StarFFM  (Fix 1 applied: two-stage frequency projection)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class StarFFM(nn.Module):
+    """
+    Star-based Frequency Fusion Module.
+
+    Fix 1 — two-stage frequency projection:
+        Original: 96 → C  (single 1×1, up to 12× reduction when C=8)
+        Fixed:    96 → mid → C  where mid is clamped to be at least 4× C.
+
+    At C=8:  96 → 32 → 8  (two manageable steps, 3× then 4×)
+    At C=48: 96 → 96 → 48 (first step is identity-like, no info loss)
+
+    The two-step projection preserves boundary-relevant frequency content
+    that the direct projection collapses.
+    """
+    def __init__(self, channel: int, freq_channels: int = 96, mlp_ratio: int = 3):
+        super().__init__()
+        C = channel
+        H = mlp_ratio * C
+
+        # Two-stage frequency lift (Fix 1)
+        mid = max(4 * C, 32)   # intermediate width: at least 32, at least 4×C
+        self.high_proj = nn.Sequential(
+            ConvBN(freq_channels, mid, 1, with_bn=True),
+            nn.GELU(),
+            ConvBN(mid, C, 1, with_bn=True),
+            nn.GELU(),
+        )
+        self.low_proj = nn.Sequential(
+            ConvBN(freq_channels, mid, 1, with_bn=True),
+            nn.GELU(),
+            ConvBN(mid, C, 1, with_bn=True),
+            nn.GELU(),
+        )
+
+        # Shared encoder DW context
+        self.dwconv = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=True)
+
+        # Star paths
+        self.h_f1 = ConvBN(C, H, 1, with_bn=False)
+        self.h_f2 = ConvBN(C, H, 1, with_bn=False)
+        self.h_g  = ConvBN(H, C, 1, with_bn=True)
+
+        self.l_f1 = ConvBN(C, H, 1, with_bn=False)
+        self.l_f2 = ConvBN(C, H, 1, with_bn=False)
+        self.l_g  = ConvBN(H, C, 1, with_bn=True)
+
+        # Cross-frequency conjunction
+        self.x_f1 = ConvBN(C, H, 1, with_bn=False)
+        self.x_f2 = ConvBN(C, H, 1, with_bn=False)
+        self.x_g  = ConvBN(H, C, 1, with_bn=True)
+
+        self.act    = nn.GELU()   # Fix 3
+        self.out_bn = nn.BatchNorm2d(C)
+
+    def forward(self, x: torch.Tensor, high: torch.Tensor, low: torch.Tensor):
+        high = F.interpolate(high, size=x.shape[2:], mode='bilinear', align_corners=False)
+        low  = F.interpolate(low,  size=x.shape[2:], mode='bilinear', align_corners=False)
+        high = self.high_proj(high)
+        low  = self.low_proj(low)
+
+        ctx = self.dwconv(x)
+
+        h_feat = self.h_g(self.act(self.h_f1(high)) * self.h_f2(ctx))
+        l_feat = self.l_g(self.act(self.l_f1(low))  * self.l_f2(ctx))
+        cross  = self.x_g(self.act(self.x_f1(h_feat)) * self.x_f2(l_feat))
+
+        return self.out_bn(x + h_feat + l_feat + cross)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# StarDeBlock  (Fix 2 + 3 applied: zero-init cross branch + GELU;
+#               low branch upgraded to LDSConv)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class StarDeBlock(nn.Module):
+    """
+    Star-based decoder block.
+
+    Fix 2 — zero-init cross-branch output BN:
+        At init, cross_g.bn.weight = 0 → cross output is zero.
+        The model trains from the residual (x + low + mid) first,
+        then gradually activates the cross-scale boundary gate.
+        Same technique as "ReZero" / FixUp — stabilises early training
+        when the multiplicative gate hasn't learned yet.
+
+    Fix 3 — GELU throughout (no ReLU6 ceiling on gate signals).
+
+    LDSConv on the low branch (new):
+        `low_dw` used to be a static 7×7 depthwise conv applied right
+        after the channel-mixing `low_g`. It's now an (unconditioned)
+        LDSConv, so the spatial sampling for the finest-detail branch
+        can deform toward thin/irregular boundary shapes instead of
+        pooling over a fixed square window. Only applied here — not in
+        deconv3, the lowest-res / highest-channel stage — to keep the
+        added compute where boundary precision actually matters most.
+
+        Set `use_ldsconv=False` to fall back to the original static
+        depthwise conv (useful for ablation / compute-constrained runs).
+    """
+    def __init__(self, in_channels: int, out_channels: int, mlp_ratio: int = 3,
+                 use_ldsconv: bool = True, lds_num_param: int = 9, lds_groups: int = 8):
+        super().__init__()
+        C = out_channels
+        H = mlp_ratio * C
+
+        self.use_ldsconv = use_ldsconv
+
+        self.proj = (
+            nn.Conv2d(in_channels, C, 1, bias=True)
+            if in_channels != C else nn.Identity()
+        )
+        self.dwconv = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=True)
+
+        # Low branch
+        self.low_f1 = ConvBN(C, H, 1, with_bn=False)
+        self.low_f2 = ConvBN(C, H, 1, with_bn=False)
+        self.low_g  = ConvBN(H, C, 1, with_bn=True)
+        if use_ldsconv:
+            self.low_dw = LDSConv(C, num_param=lds_num_param, groups=lds_groups, lks=7)
         else:
-            assert DeBlock is not None, "DeBlock not available"
-            self.deconv3 = DeBlock(channels[3], channels[2])
-            self.deconv2 = DeBlock(channels[2], channels[1])
-            self.deconv1 = DeBlock(channels[1], channels[0])
+            self.low_dw = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=False)
 
-        # ── Output heads ──────────────────────────────────────────────────────
-        self.out_conv1 = nn.Conv2d(channels[0], 1, 3, padding=1)
-        self.out_conv2 = nn.Conv2d(channels[1], 1, 3, padding=1)
-        self.out_conv3 = nn.Conv2d(channels[2], 1, 3, padding=1)
-        self.out_conv4 = nn.Conv2d(channels[3], 1, 3, padding=1)
+        # Mid branch
+        self.mid_blocks = nn.ModuleList([Block(C, mlp_ratio) for _ in range(2)])
+        self.mid_f1 = ConvBN(C, H, 1, with_bn=False)
+        self.mid_f2 = ConvBN(C, H, 1, with_bn=False)
+        self.mid_g  = ConvBN(H, C, 1, with_bn=True)
+        self.mid_dw = ConvBN(C, C, 7, 1, 3, groups=C, with_bn=False)
 
-        # ── ASF + ScalSeq (unchanged) ─────────────────────────────────────────
-        self.asf4      = asf_attention_model(channels[3])
-        self.asf3      = asf_attention_model(channels[2])
-        self.asf2      = asf_attention_model(channels[1])
-        self.asf1      = asf_attention_model(channels[0])
-        self.asf_proj3 = nn.Conv2d(channels[3], channels[2], 1)
-        self.asf_proj2 = nn.Conv2d(channels[2], channels[1], 1)
-        self.asf_proj1 = nn.Conv2d(channels[1], channels[0], 1)
-        self.ssff      = ScalSeq([channels[0], channels[1], channels[2]], channels[3])
+        # Top branch
+        self.top_block = Block(C, mlp_ratio)
 
-    def forward(self, x, high, low):
-        lap_levels = self.laplacian_pyramid(x)
-        x0, x1, x2, x3, x4 = self.encoder(x)
+        # Cross-scale star (Fix 2: output BN gamma zeroed at init)
+        self.cross_f1 = ConvBN(C, H, 1, with_bn=False)
+        self.cross_f2 = ConvBN(C, H, 1, with_bn=False)
+        self.cross_g  = ConvBN(H, C, 1, with_bn=True)
+        nn.init.zeros_(self.cross_g.bn.weight)   # <-- zero-init gamma
 
-        x1 = self.lap_injection1(x1, lap_levels[0])
-        x2 = self.lap_injection2(x2, lap_levels[1])
-        x3 = self.lap_injection3(x3, lap_levels[2])
+        self.act    = nn.GELU()   # Fix 3
+        self.out_bn = nn.BatchNorm2d(C)
 
-        x1 = self.re_conv1(x1)
-        x2 = self.re_conv2(x2)
-        x3 = self.re_conv3(x3)
-        x4 = self.re_conv4(x4)
+    def forward(self, x: torch.Tensor):
+        x   = self.proj(x)
+        ctx = self.dwconv(x) + x
 
-        x1   = self.ffm1(x=x1, high=high, low=low)
-        x2   = self.ffm2(x=x2, high=high, low=low)
-        x3   = self.ffm3(x=x3, high=high, low=low)
-        out4 = self.ffm4(x=x4, high=high, low=low)
+        # Channel-mix (low_g) always runs first; low_dw is then either the
+        # original static depthwise conv or the deformable LDSConv refine step.
+        low = self.low_g(self.act(self.low_f1(ctx)) * self.low_f2(ctx))
+        low = self.low_dw(low)
 
-        out3 = self.gelu(
-            self.deconv3(F.interpolate(out4, size=x3.shape[2:], mode='bilinear', align_corners=False)) + x3)
-        out2 = self.gelu(
-            self.deconv2(F.interpolate(out3, size=x2.shape[2:], mode='bilinear', align_corners=False)) + x2)
-        out1 = self.gelu(
-            self.deconv1(F.interpolate(out2, size=x1.shape[2:], mode='bilinear', align_corners=False)) + x1)
+        mid = ctx
+        for blk in self.mid_blocks:
+            mid = blk(mid)
+        mid = self.mid_dw(self.mid_g(self.act(self.mid_f1(mid)) * self.mid_f2(mid)))
 
-        fused = self.ssff([x1, x2, x3])
-        fused = F.interpolate(fused, size=out4.shape[2:], mode='bilinear', align_corners=False)
+        top   = self.top_block(mid)
+        cross = self.cross_g(self.act(self.cross_f1(low)) * self.cross_f2(top))
 
-        out4 = self.asf4([out4, fused])
-        out3 = self.asf3([out3, self.asf_proj3(F.interpolate(out4, size=out3.shape[2:], mode='bilinear', align_corners=False))])
-        out2 = self.asf2([out2, self.asf_proj2(F.interpolate(out3, size=out2.shape[2:], mode='bilinear', align_corners=False))])
-        out1 = self.asf1([out1, self.asf_proj1(F.interpolate(out2, size=out1.shape[2:], mode='bilinear', align_corners=False))])
-
-        out1 = self.out_conv1(out1)
-        out2 = self.out_conv2(out2)
-        out3 = self.out_conv3(out3)
-        out4 = self.out_conv4(out4)
-
-        size = (out1.shape[2] * 4, out1.shape[3] * 4)
-        out1 = F.interpolate(out1, size=size, mode='bilinear', align_corners=False)
-        out2 = F.interpolate(out2, size=size, mode='bilinear', align_corners=False)
-        out3 = F.interpolate(out3, size=size, mode='bilinear', align_corners=False)
-        out4 = F.interpolate(out4, size=size, mode='bilinear', align_corners=False)
-        return out1, out2, out3, out4
+        return self.out_bn(x + low + mid + cross)
