@@ -8,11 +8,47 @@ We make StarNet as simple as possible [to show the key contribution of element-w
 
 Created by: Xu Ma (Email: ma.xu1@northeastern.edu)
 Modified Date: Mar/29/2024
+
+------------------------------------------------------------------
+Local-feature refinement (new)
+------------------------------------------------------------------
+`StarNetEncoder` now optionally inserts a `LocalDetailRefine` module
+(LDSConv-based — see Model/lap_utils.py) *after* selected stage outputs,
+rather than modifying anything inside `Block`. This is deliberate:
+
+  • `load_starnet_pretrained` (Model/star_utils.py) copies ImageNet
+    weights into `StarNetEncoder` by exact key name + shape match.
+    Swapping the depthwise conv inside `Block` for LDSConv would change
+    those layers' parameter shapes, silently dropping pretrained init
+    for every block touched — undermining Fix 4, which was already
+    identified as the single biggest source of metric improvement.
+    A post-stage hook leaves every `Block` (and its pretrained weights)
+    completely untouched.
+
+  • `LocalDetailRefine` is gated by a learnable scalar passed through
+    `tanh`, initialized at 0. At the start of fine-tuning the encoder
+    is mathematically identical to the pretrained one — the refinement
+    only phases in as training pulls the gate open. No information is
+    lost relative to the pretrained checkpoint at init, and there's no
+    risk of compounding with other zero-initialized branches downstream
+    (StarDeBlock.cross_g, LDSConv.offset_conv) the way an always-on
+    in-block replacement would.
+
+  • Default `local_enhance_stages=(2,)`: stage 2 output only (the
+    higher-resolution of the two mid stages). Texture/edge detail
+    relevant to camouflage discrimination is still rich there, but the
+    spatial map is small enough that LDSConv's gather-based sampling
+    isn't prohibitively expensive. Stage 1 is supported but off by
+    default (largest spatial map, costliest); stages 3/4 are already
+    semantically abstracted, where extra local adaptivity buys little
+    for camouflage detection specifically.
 """
 import torch
 import torch.nn as nn
 from timm.models.layers import DropPath, trunc_normal_
 from timm.models.registry import register_model
+
+from Model.lap_utils import LDSConv
 
 model_urls = {
     "starnet_s1": "https://github.com/ma-xu/Rewrite-the-Stars/releases/download/checkpoints_v1/starnet_s1.pth.tar",
@@ -94,8 +130,32 @@ class StarNet(nn.Module):
         return self.head(x)
 
 
+class LocalDetailRefine(nn.Module):
+    """
+    Post-stage local-feature refinement.
+
+    Wraps LDSConv (deformable sampling + LKP/SKA spatially-adaptive
+    weighting) around a stage output. Gated by a learnable scalar passed
+    through tanh and initialized at 0, so this module is the identity
+    function at init — the pretrained backbone's behaviour is preserved
+    exactly until fine-tuning pulls the gate open.
+    """
+    def __init__(self, channels: int, num_param: int = 9, groups: int = 8, lks: int = 7):
+        super().__init__()
+        self.refine = LDSConv(channels, num_param=num_param, groups=groups, lks=lks)
+        self.gate = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # LDSConv.forward already returns bn(out) + x, so subtracting x
+        # isolates the refinement delta that gets gated.
+        delta = self.refine(x) - x
+        return x + torch.tanh(self.gate) * delta
+
+
 class StarNetEncoder(nn.Module):
-    def __init__(self, variant="starnet_s1", **kwargs):
+    def __init__(self, variant="starnet_s1", local_enhance_stages=(2,),
+                 local_num_param: int = 9, local_groups: int = 8, local_lks: int = 7,
+                 **kwargs):
         super().__init__()
         configs = {
             "starnet_s050": (16, [1, 1, 3, 1], 3),
@@ -115,11 +175,29 @@ class StarNetEncoder(nn.Module):
         self.stem = model.stem
         self.stages = model.stages
 
+        # stage_channels[i] for i in 1..4 is the output width of self.stages[i-1]
+        stage_channels = [32, base_dim, base_dim * 2, base_dim * 4, base_dim * 8]
+
+        # Post-stage local refinement (does NOT touch Block / pretrained weights).
+        # Keys live under `local_refine.<stage_idx>` so load_starnet_pretrained's
+        # key-matching against a classification checkpoint simply reports them
+        # as "missing" (new capacity, randomly/gate-initialized) rather than
+        # clobbering anything.
+        self.local_enhance_stages = set(local_enhance_stages)
+        self.local_refine = nn.ModuleDict({
+            str(i): LocalDetailRefine(stage_channels[i], num_param=local_num_param,
+                                       groups=local_groups, lks=local_lks)
+            for i in self.local_enhance_stages
+        })
+
     def forward(self, x):
         out0 = self.stem(x)
         features = [out0]
-        for stage in self.stages:
-            features.append(stage(features[-1]))
+        for i, stage in enumerate(self.stages, start=1):
+            feat = stage(features[-1])
+            if i in self.local_enhance_stages:
+                feat = self.local_refine[str(i)](feat)
+            features.append(feat)
         return tuple(features)
 
     def get_stage_channels(self):
