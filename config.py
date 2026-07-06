@@ -14,7 +14,7 @@ class Config:
 
         self.epochs = 200 # changed this for testing WandB
         self.trainsize = 384
-        self.batch_size = 32
+        self.batch_size = 16
         self.weight_decay = 4e-8
         self.learning_rate = 2.6e-4
         self.min_lr = 1e-6
