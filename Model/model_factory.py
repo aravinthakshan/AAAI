@@ -1,5 +1,10 @@
 BACKBONE_CHOICES = [
     "efficientb0",
+    "efficientnetb0",
+    "efficientnet_b0",
+    "efficientb1",
+    "efficientnetb1",
+    "efficientnet_b1",
     "tinynet-a",
     "starnet_s050",
     "starnet_s100",
@@ -70,8 +75,16 @@ def normalize_model_name(model_name):
 def build_model(model_name, backbone="efficientb0", channels=(8, 24, 32, 64)):
     model_name = normalize_model_name(model_name)
     if model_name == "FINet":
-        if backbone not in ["efficientb0", "tinynet-a"]:
-            raise ValueError("FINet currently supports only efficientb0 and tinynet-a backbones.")
+        if backbone not in [
+            "efficientb0",
+            "efficientnetb0",
+            "efficientnet_b0",
+            "efficientb1",
+            "efficientnetb1",
+            "efficientnet_b1",
+            "tinynet-a",
+        ]:
+            raise ValueError("FINet currently supports efficientb0, efficientb1, and tinynet-a backbones.")
         from Model.FINet import FINet
         return FINet(backbone=backbone, channels=channels)
     from Model.LAFinet import LaplacianFINet

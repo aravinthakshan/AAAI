@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from Model.EfficientNet import EfficientNet_B0
+from Model.EfficientNet import EfficientNet_B0, EfficientNet_B1
 from Model.TinyNet import TinyNetA
 from Model.Modules import ConvBNGeLU, ConvBN, DepthwiseSeparableConv
 from Model.Replacements import FSM_FFM
@@ -151,8 +151,10 @@ class FINet(nn.Module):
     def __init__(self, backbone='efficientb0', channels=(8,12,24,48)):
         super(FINet, self).__init__()
 
-        if backbone == 'efficientb0':
+        if backbone in ('efficientb0', 'efficientnetb0', 'efficientnet_b0'):
             self.encoder = EfficientNet_B0() # this is just being used as an encoder 
+        elif backbone in ('efficientb1', 'efficientnetb1', 'efficientnet_b1'):
+            self.encoder = EfficientNet_B1()
         elif backbone == 'tinynet-a':
             self.encoder = TinyNetA()
         else:

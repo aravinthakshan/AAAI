@@ -33,7 +33,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from Model.EfficientNet   import EfficientNet_B0
+from Model.EfficientNet   import EfficientNet_B0, EfficientNet_B1
 from Model.TinyNet        import TinyNetA
 from Model.Starnet        import StarNetEncoder, Block
 from Model.Demonet        import DemoNetEncoder
@@ -59,8 +59,10 @@ except ImportError:
 
 
 def build_lafinet_backbone(backbone: str, pretrained: bool = False):
-    if backbone == 'efficientb0':
+    if backbone in ('efficientb0', 'efficientnetb0', 'efficientnet_b0'):
         return EfficientNet_B0()
+    if backbone in ('efficientb1', 'efficientnetb1', 'efficientnet_b1'):
+        return EfficientNet_B1()
     if backbone == 'tinynet-a':
         return TinyNetA()
     if backbone.startswith('starnet_'):

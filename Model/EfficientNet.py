@@ -51,6 +51,38 @@ class EfficientNet_B0(nn.Module):
 	def get_stage_channels():
 		return [16, 24, 40, 112, 320]
 
+
+class EfficientNet_B1(nn.Module):
+	def __init__(self):
+		super(EfficientNet_B1, self).__init__()
+
+		model = models.efficientnet_b1(weights=models.EfficientNet_B1_Weights.DEFAULT)
+
+		self.layer1 = model.features[0]
+		self.layer2 = model.features[1]
+		self.layer3 = model.features[2]
+		self.layer4 = model.features[3]
+		self.layer5 = model.features[4]
+		self.layer6 = model.features[5]
+		self.layer7 = model.features[6]
+		self.layer8 = model.features[7]
+
+	def forward(self, x):
+		out1 = self.layer1(x)
+		out2 = self.layer2(out1)
+		out3 = self.layer3(out2)
+		out4 = self.layer4(out3)
+		out5 = self.layer5(out4)
+		out6 = self.layer6(out5)
+		out7 = self.layer7(out6)
+		out8 = self.layer8(out7)
+
+		return out2, out3, out4, out6, out8
+
+	@staticmethod
+	def get_stage_channels():
+		return [16, 24, 40, 112, 320]
+
 def count_parameters(model):
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
